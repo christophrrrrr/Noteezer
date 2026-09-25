@@ -1,6 +1,6 @@
-# Jot
+# Noteezer
 
-Jot is a phone-friendly capture app for the notes, tasks, links, and reminders that would otherwise be messages sent to yourself.
+Noteezer is a phone-friendly capture app for the notes, tasks, links, and reminders that would otherwise be messages sent to yourself.
 
 You type one line and save it. Optional buttons can force the kind. A reminder also needs a date and time from a picker. The app stores everything in SQLite and shows what is due when you open it.
 
@@ -29,7 +29,7 @@ Times are chosen with a picker. The app does not parse phrases like "friday 3pm"
 
 ## In this assignment
 
-- One process, Python, Flask, server-rendered pages, SQLite.
+- One process, Python, FastAPI, server-rendered pages, SQLite.
 - Due reminders appear at the top when you open the app. Snooze and done are supported.
 - Minimal accounts: register, log in, log out. Password hash and a signed session cookie. Not a third feature domain.
 

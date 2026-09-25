@@ -4,10 +4,10 @@
 
 Date: 2026-09-25
 Status: Decided
-Context: The app is one process with server-rendered phone pages, SQLite, and two small domains. The written check requires explaining the code with no notes, and the brief treats a heavier framework than the app needs as poor judgment.
-Decision: Python with Flask, Jinja templates, and the standard-library `sqlite3` module. Business rules live in plain modules. Routes stay thin.
-Alternatives considered: Django was rejected because its admin, ORM, and auth stack are more than register/login and two domains need. FastAPI was rejected because this version serves HTML pages rather than a separate API, and Flask is the smaller surface to explain. A React frontend was rejected because it adds a second toolchain and more dependencies without a second process to justify them.
-Consequences: The dependency list stays small (Flask plus the test tools). Account sessions use Flask's signed cookie and Werkzeug's password hash, which already come with Flask. A later service split can lift the two domain modules out without rewriting them around a web framework.
+Context: The app is one process with phone pages, SQLite, and two domains that Assignment 2 will split into services. The framework should be the one you would pick for that service, not a larger platform and not a second UI toolchain.
+Decision: Python with FastAPI and Jinja templates, served as one process, with the standard-library `sqlite3` module behind repository functions. Inbox and reminder rules live in plain modules that do not import FastAPI. Routes validate input and call those modules.
+Alternatives considered: Django was rejected because its admin, ORM, and auth stack are more than register/login and two domains need. Flask was rejected because the known next step is to split two HTTP services, and Flask does not give typed request boundaries for that split. A React frontend was rejected because one text box does not need a second toolchain. SQLAlchemy was rejected because the schema is a few tables and the tested logic should stay in our functions, not in an ORM.
+Consequences: Dependencies stay at FastAPI, Uvicorn, Jinja2, and the test tools. Passwords are hashed with the standard-library `hashlib`, and the session is a signed cookie implemented in our code. Assignment 2 can move each domain module behind its own FastAPI app without rewriting the rules.
 
 ## [2]. Inbox and reminders are separate domains
 
