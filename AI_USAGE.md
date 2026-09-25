@@ -1,0 +1,5 @@
+# AI usage log
+
+| Date/commit | Tool | Prompt | Disposition (Accepted/Modified/Rejected) | What changed & why (if modified) | In my own words, how this works |
+|---|---|---|---|---|---|
+| 2026-09-25 | Cursor (Grok) | Turn the habit of texting notes to myself into a phone-friendly capture app with sorting and reminders, scoped so Assignment 1 can score well, then draft the professor email and the first commit. | Modified | Accepted one text box, optional kind buttons, tags, search, edit, delete, done, snooze, and a minimal login. Time comes from a picker, not from phrases like "friday 3pm". Lock-screen push was left out because it needs a second process. Flask was chosen over a heavier stack. | No application functions exist in this commit. The README states the two areas: inbox stores the line, and reminders store when it is due. ADR-1 records Flask. ADR-2 records that inbox calls `schedule(item_id, when)` and does not keep the due time itself. |
