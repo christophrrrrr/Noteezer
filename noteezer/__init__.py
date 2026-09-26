@@ -1,0 +1,1 @@
+"""Noteezer application package."""

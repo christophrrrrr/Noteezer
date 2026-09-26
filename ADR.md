@@ -17,3 +17,12 @@ Context: The product is one text box that becomes a note, task, link, or reminde
 Decision: Inbox owns the text, kind, tags, search, edit, delete, and task completion. Reminders own `remind_at` and status (scheduled, due, snoozed, done) in their own table, keyed by item id. The only coupling is `schedule(item_id, when)` after inbox saves an item that has a picked time. Deleting an item also removes its reminder through that same boundary.
 Alternatives considered: One `notes` table with an optional `remind_at` column was rejected because reminders would not have their own responsibility or data. Making tags the second domain was rejected because the behaviour the user needs next is due, snooze, and done, which is a schedule, not a label.
 Consequences: Assignment 2 can run reminders as its own service that stores item ids and due times, while inbox keeps the text. Lock-screen delivery can sit on the reminder side later without changing how lines are captured.
+
+## [3]. How inbox rows relate to reminder rows
+
+Date: 2026-09-26
+Status: Decided
+Context: The two domains need a schema that matches the split. A due time on `items` would collapse them. Tags and accounts also need a place that does not become a third domain.
+Decision: `items` stores body and kind for one user. `reminders` uses `item_id` as its primary key, so an item has at most one schedule, and the schedule does not copy the text. A reminder row is only created when `kind` is `reminder`. Tags are one row per user and name in `tags`, linked through `item_tags`. Accounts are `users.email` plus a password hash.
+Alternatives considered: An optional `remind_at` column on `items` was rejected because inbox would own the schedule. Allowing any kind to have a due time was rejected so a task stays a task, and only a reminder item gets a schedule. Storing tags as text on the item was rejected because the same `#groceries` tag must be one record the user can filter on.
+Consequences: Deleting an item deletes its reminder and tag links. The database diagram is `users` to `items` and `tags`, `items` to `item_tags` to `tags`, and `items` to `reminders` one-to-one. `schedule(item_id, when)` is the only write from inbox into reminders.

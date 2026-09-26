@@ -4,7 +4,7 @@ Noteezer is a phone-friendly capture app for the notes, tasks, links, and remind
 
 You type one line and save it. Optional buttons can force the kind. A reminder also needs a date and time from a picker. The app stores everything in SQLite and shows what is due when you open it.
 
-Feature code waits on approval of this use case. This repository currently records the scope and the framework decision.
+The use case is approved. The SQLite schema is in place. Saving and listing items comes next.
 
 ## Who it is for
 
@@ -31,7 +31,7 @@ Times are chosen with a picker. The app does not parse phrases like "friday 3pm"
 
 - One process, Python, FastAPI, server-rendered pages, SQLite.
 - Due reminders appear at the top when you open the app. Snooze and done are supported.
-- Minimal accounts: register, log in, log out. Password hash and a signed session cookie. Not a third feature domain.
+- Minimal accounts: register, log in, and log out with email and password. Not a third feature domain.
 
 ## Left for later
 
@@ -39,4 +39,19 @@ Lock-screen notifications need a second always-on process. This assignment forbi
 
 ## Run
 
-Not runnable yet. Setup steps will be added with the first working version.
+From the repository root:
+
+```
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python app.py
+```
+
+The process listens on `0.0.0.0` and port `8000`, or `PORT` if that variable is set. The SQLite file is `data/noteezer.db`, or `$DATA_DIR/noteezer.db` if `DATA_DIR` is set. Open `http://127.0.0.1:8000/health` to confirm it started. The capture screen is not built yet.
+
+Schema tests:
+
+```
+pytest
+```
