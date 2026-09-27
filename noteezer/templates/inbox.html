@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block body %}
+<nav>
+  <h1>Noteezer</h1>
+  <form method="post" action="/logout"><button type="submit">Log out</button></form>
+</nav>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/inbox">
+  <textarea name="body" placeholder="Write a line" required>{{ body }}</textarea>
+  <select name="kind">
+    <option value="" {% if kind == "" %}selected{% endif %}>Sort it for me</option>
+    <option value="note" {% if kind == "note" %}selected{% endif %}>Note</option>
+    <option value="task" {% if kind == "task" %}selected{% endif %}>Task</option>
+    <option value="link" {% if kind == "link" %}selected{% endif %}>Link</option>
+    <option value="reminder" {% if kind == "reminder" %}selected{% endif %}>Reminder</option>
+  </select>
+  <input name="remind_at" type="datetime-local" value="{{ remind_at }}">
+  <button type="submit">Save</button>
+</form>
+<ul>
+  {% for item in items %}
+  <li class="item">
+    <div>{{ item.body }}</div>
+    <div class="meta">
+      {{ item.kind }}
+      {% if item.tags %} · {% for tag in item.tags %}#{{ tag }} {% endfor %}{% endif %}
+      {% if item.status %}
+        · <span class="{% if item.status == 'due' %}due{% endif %}">{{ item.status }} {{ item.remind_at }}</span>
+      {% endif %}
+    </div>
+  </li>
+  {% else %}
+  <li class="meta">Nothing saved yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}
