@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS reminders (
     item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
     remind_at TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('scheduled', 'due', 'snoozed', 'done')),
-    snoozed_until TEXT
+    snoozed_until TEXT,
+    repeat_daily INTEGER NOT NULL DEFAULT 0 CHECK (repeat_daily IN (0, 1)),
+    repeat_until TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_items_user_created ON items (user_id, created_at);

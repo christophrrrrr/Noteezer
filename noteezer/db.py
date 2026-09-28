@@ -21,3 +21,10 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 
 def init_db(connection: sqlite3.Connection) -> None:
     connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(reminders)")}
+    if "repeat_daily" not in columns:
+        connection.execute(
+            "ALTER TABLE reminders ADD COLUMN repeat_daily INTEGER NOT NULL DEFAULT 0"
+        )
+    if "repeat_until" not in columns:
+        connection.execute("ALTER TABLE reminders ADD COLUMN repeat_until TEXT")

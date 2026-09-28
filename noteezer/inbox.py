@@ -1,8 +1,8 @@
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from noteezer.classify import ClassificationError, classify
-from noteezer.reminders import schedule
+from noteezer.reminders import refresh, schedule
 
 
 def save_item(
@@ -12,10 +12,14 @@ def save_item(
     remind_at: datetime | None,
     now: datetime,
     forced_kind: str | None = None,
+    repeat_daily: bool = False,
+    repeat_until: date | None = None,
 ) -> int:
     classified = classify(body, forced_kind)
-    if classified.kind == "reminder" and remind_at is None:
-        raise ClassificationError("Pick a date and time for a reminder.")
+    _check_reminder(classified.kind, remind_at, repeat_daily, repeat_until)
+    if classified.kind != "reminder":
+        repeat_daily = False
+        repeat_until = None
     stamp = now.astimezone(timezone.utc).isoformat()
     cursor = connection.execute(
         """
@@ -27,22 +31,96 @@ def save_item(
     item_id = int(cursor.lastrowid)
     _attach_tags(connection, user_id, item_id, classified.tags)
     if classified.kind == "reminder" and remind_at is not None:
-        schedule(connection, item_id, remind_at, now)
+        schedule(connection, item_id, remind_at, now, repeat_daily, repeat_until)
     connection.commit()
     return item_id
 
 
-def list_items(connection: sqlite3.Connection, user_id: int) -> list[dict]:
-    rows = connection.execute(
+def update_item(
+    connection: sqlite3.Connection,
+    user_id: int,
+    item_id: int,
+    body: str,
+    remind_at: datetime | None,
+    now: datetime,
+    forced_kind: str | None = None,
+    repeat_daily: bool = False,
+    repeat_until: date | None = None,
+) -> None:
+    existing = _owned_item(connection, user_id, item_id)
+    classified = classify(body, forced_kind)
+    _check_reminder(classified.kind, remind_at, repeat_daily, repeat_until)
+    if classified.kind != "reminder":
+        repeat_daily = False
+        repeat_until = None
+    stamp = now.astimezone(timezone.utc).isoformat()
+    connection.execute(
         """
-        SELECT i.id, i.body, i.kind, i.created_at, r.remind_at, r.status
+        UPDATE items
+        SET body = ?, kind = ?,
+            task_done = CASE WHEN ? = 'task' THEN task_done ELSE 0 END,
+            updated_at = ?
+        WHERE id = ? AND user_id = ?
+        """,
+        (classified.body, classified.kind, classified.kind, stamp, item_id, user_id),
+    )
+    connection.execute("DELETE FROM item_tags WHERE item_id = ?", (item_id,))
+    _attach_tags(connection, user_id, item_id, classified.tags)
+    if classified.kind == "reminder" and remind_at is not None:
+        schedule(connection, item_id, remind_at, now, repeat_daily, repeat_until)
+    elif existing["kind"] == "reminder":
+        connection.execute("DELETE FROM reminders WHERE item_id = ?", (item_id,))
+    connection.commit()
+
+
+def delete_item(connection: sqlite3.Connection, user_id: int, item_id: int) -> None:
+    cursor = connection.execute(
+        "DELETE FROM items WHERE id = ? AND user_id = ?",
+        (item_id, user_id),
+    )
+    if cursor.rowcount == 0:
+        raise LookupError("item not found")
+    connection.commit()
+
+
+def set_task_done(
+    connection: sqlite3.Connection,
+    user_id: int,
+    item_id: int,
+    done: bool,
+) -> None:
+    row = _owned_item(connection, user_id, item_id)
+    if row["kind"] != "task":
+        raise ValueError("only a task can be marked done")
+    connection.execute(
+        "UPDATE items SET task_done = ? WHERE id = ? AND user_id = ?",
+        (1 if done else 0, item_id, user_id),
+    )
+    connection.commit()
+
+
+def list_items(
+    connection: sqlite3.Connection,
+    user_id: int,
+    query: str = "",
+    now: datetime | None = None,
+) -> list[dict]:
+    if now is not None:
+        refresh(connection, user_id, now)
+    sql = """
+        SELECT i.id, i.body, i.kind, i.task_done, i.created_at,
+               r.remind_at, r.status, r.repeat_daily, r.repeat_until
         FROM items i
         LEFT JOIN reminders r ON r.item_id = i.id
         WHERE i.user_id = ?
-        ORDER BY CASE WHEN r.status = 'due' THEN 0 ELSE 1 END, i.created_at DESC
-        """,
-        (user_id,),
-    ).fetchall()
+    """
+    parameters: list[object] = [user_id]
+    cleaned = query.strip()
+    if cleaned:
+        sql += " AND i.body LIKE ? ESCAPE '\\'"
+        parameters.append(_like(cleaned))
+    sql += " ORDER BY CASE WHEN r.status = 'due' THEN 0 ELSE 1 END, i.created_at DESC"
+    rows = connection.execute(sql, parameters).fetchall()
     tags_by_item: dict[int, list[str]] = {int(row["id"]): [] for row in rows}
     if tags_by_item:
         placeholders = ",".join("?" for _ in tags_by_item)
@@ -63,13 +141,48 @@ def list_items(connection: sqlite3.Connection, user_id: int) -> list[dict]:
             "id": int(row["id"]),
             "body": row["body"],
             "kind": row["kind"],
+            "task_done": bool(row["task_done"]),
             "created_at": row["created_at"],
             "remind_at": row["remind_at"],
+            "remind_local": _local_input(row["remind_at"]),
             "status": row["status"],
+            "repeat_daily": bool(row["repeat_daily"]),
+            "repeat_until": row["repeat_until"],
             "tags": tags_by_item[int(row["id"])],
         }
         for row in rows
     ]
+
+
+def _check_reminder(
+    kind: str,
+    remind_at: datetime | None,
+    repeat_daily: bool,
+    repeat_until: date | None,
+) -> None:
+    if kind == "reminder" and remind_at is None:
+        raise ClassificationError("Pick a date and time for a reminder.")
+    if kind != "reminder":
+        return
+    if repeat_until is not None and not repeat_daily:
+        raise ClassificationError("An end date is only for a daily reminder.")
+    if (
+        repeat_daily
+        and repeat_until is not None
+        and remind_at is not None
+        and repeat_until < remind_at.astimezone(timezone.utc).date()
+    ):
+        raise ClassificationError("The end date has to be on or after the start.")
+
+
+def _owned_item(connection: sqlite3.Connection, user_id: int, item_id: int) -> sqlite3.Row:
+    row = connection.execute(
+        "SELECT id, kind FROM items WHERE id = ? AND user_id = ?",
+        (item_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("item not found")
+    return row
 
 
 def _attach_tags(
@@ -94,3 +207,17 @@ def _attach_tags(
             "INSERT INTO item_tags (item_id, tag_id) VALUES (?, ?)",
             (item_id, int(tag_id)),
         )
+
+
+def _local_input(value: str | None) -> str:
+    if not value:
+        return ""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone().strftime("%Y-%m-%dT%H:%M")
+
+
+def _like(query: str) -> str:
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"

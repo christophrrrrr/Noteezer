@@ -1,5 +1,6 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import RedirectResponse
@@ -7,7 +8,8 @@ from fastapi.templating import Jinja2Templates
 
 from noteezer.classify import ClassificationError
 from noteezer.db import connect
-from noteezer.inbox import list_items, save_item
+from noteezer.inbox import delete_item, list_items, save_item, set_task_done, update_item
+from noteezer.reminders import complete, snooze
 from noteezer.sessions import COOKIE_NAME, read_user_id, sign_user_id
 from noteezer.users import AccountError, authenticate, register_user
 
@@ -60,20 +62,11 @@ def register_routes(app: FastAPI) -> None:
         return response
 
     @app.get("/inbox")
-    def inbox_form(request: Request):
+    def inbox_form(request: Request, q: str = ""):
         user_id = _current_user(request)
         if user_id is None:
             return RedirectResponse("/login", status_code=303)
-        connection = connect()
-        try:
-            items = list_items(connection, user_id)
-        finally:
-            connection.close()
-        return TEMPLATES.TemplateResponse(
-            request,
-            "inbox.html",
-            _inbox_context(items, "", "", "", None),
-        )
+        return _render_inbox(request, user_id, q, "", "", "", False, "", None)
 
     @app.post("/inbox")
     def inbox_save(
@@ -81,10 +74,14 @@ def register_routes(app: FastAPI) -> None:
         body: str = Form(""),
         kind: str = Form(""),
         remind_at: str = Form(""),
+        repeat_daily: str = Form(""),
+        repeat_until: str = Form(""),
+        q: str = Form(""),
     ):
         user_id = _current_user(request)
         if user_id is None:
             return RedirectResponse("/login", status_code=303)
+        daily = repeat_daily == "1"
         connection = connect()
         try:
             save_item(
@@ -94,19 +91,135 @@ def register_routes(app: FastAPI) -> None:
                 _parse_remind_at(remind_at),
                 _now(),
                 forced_kind=kind or None,
+                repeat_daily=daily,
+                repeat_until=_parse_date(repeat_until),
             )
-            items = list_items(connection, user_id)
-        except ClassificationError as error:
-            items = list_items(connection, user_id)
-            return TEMPLATES.TemplateResponse(
-                request,
-                "inbox.html",
-                _inbox_context(items, body, kind, remind_at, str(error)),
-                status_code=400,
+        except (ClassificationError, ValueError) as error:
+            return _render_inbox(
+                request, user_id, q, body, kind, remind_at, daily, repeat_until, str(error), status_code=400
             )
         finally:
             connection.close()
-        return RedirectResponse("/inbox", status_code=303)
+        return _inbox_redirect(q)
+
+    @app.post("/items/{item_id}/edit")
+    def edit_item(
+        request: Request,
+        item_id: int,
+        body: str = Form(""),
+        kind: str = Form(""),
+        remind_at: str = Form(""),
+        repeat_daily: str = Form(""),
+        repeat_until: str = Form(""),
+        q: str = Form(""),
+    ):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            update_item(
+                connection,
+                user_id,
+                item_id,
+                body,
+                _parse_remind_at(remind_at),
+                _now(),
+                forced_kind=kind or None,
+                repeat_daily=repeat_daily == "1",
+                repeat_until=_parse_date(repeat_until),
+            )
+        except LookupError:
+            return RedirectResponse("/inbox", status_code=303)
+        except (ClassificationError, ValueError) as error:
+            return _render_inbox(request, user_id, q, body, kind, remind_at, False, "", str(error), status_code=400)
+        finally:
+            connection.close()
+        return _inbox_redirect(q)
+
+    @app.post("/items/{item_id}/delete")
+    def remove_item(request: Request, item_id: int, q: str = Form("")):
+        user_id = _require_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            delete_item(connection, user_id, item_id)
+        except LookupError:
+            pass
+        finally:
+            connection.close()
+        return _inbox_redirect(q)
+
+    @app.post("/items/{item_id}/done")
+    def mark_done(request: Request, item_id: int, q: str = Form("")):
+        user_id = _require_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            row = connection.execute(
+                "SELECT kind, task_done FROM items WHERE id = ? AND user_id = ?",
+                (item_id, user_id),
+            ).fetchone()
+            if row is None:
+                pass
+            elif row["kind"] == "task":
+                set_task_done(connection, user_id, item_id, not bool(row["task_done"]))
+            elif row["kind"] == "reminder":
+                complete(connection, user_id, item_id, _now())
+        finally:
+            connection.close()
+        return _inbox_redirect(q)
+
+    @app.post("/items/{item_id}/snooze")
+    def snooze_item(request: Request, item_id: int, q: str = Form("")):
+        user_id = _require_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            snooze(connection, user_id, item_id, _now())
+        except (LookupError, ValueError):
+            pass
+        finally:
+            connection.close()
+        return _inbox_redirect(q)
+
+
+def _render_inbox(
+    request: Request,
+    user_id: int,
+    query: str,
+    body: str,
+    kind: str,
+    remind_at: str,
+    repeat_daily: bool,
+    repeat_until: str,
+    error: str | None,
+    status_code: int = 200,
+):
+    connection = connect()
+    try:
+        items = list_items(connection, user_id, query, _now())
+    finally:
+        connection.close()
+    return TEMPLATES.TemplateResponse(
+        request,
+        "inbox.html",
+        {
+            "title": "Inbox",
+            "items": items,
+            "body": body,
+            "kind": kind,
+            "remind_at": remind_at,
+            "repeat_daily": repeat_daily,
+            "repeat_until": repeat_until,
+            "query": query,
+            "error": error,
+        },
+        status_code=status_code,
+    )
 
 
 def _account_page(request: Request, title: str, other_href: str, other_label: str, email: str, error: str | None):
@@ -126,25 +239,25 @@ def _account_page(request: Request, title: str, other_href: str, other_label: st
     )
 
 
-def _inbox_context(items: list[dict], body: str, kind: str, remind_at: str, error: str | None) -> dict:
-    return {
-        "title": "Inbox",
-        "items": items,
-        "body": body,
-        "kind": kind,
-        "remind_at": remind_at,
-        "error": error,
-    }
-
-
 def _logged_in(user_id: int) -> RedirectResponse:
     response = RedirectResponse("/inbox", status_code=303)
     response.set_cookie(COOKIE_NAME, sign_user_id(user_id), httponly=True, samesite="lax")
     return response
 
 
+def _inbox_redirect(query: str) -> RedirectResponse:
+    target = "/inbox"
+    if query.strip():
+        target = "/inbox?q=" + quote(query.strip())
+    return RedirectResponse(target, status_code=303)
+
+
 def _current_user(request: Request) -> int | None:
     return read_user_id(request.cookies.get(COOKIE_NAME))
+
+
+def _require_user(request: Request) -> int | None:
+    return _current_user(request)
 
 
 def _parse_remind_at(value: str) -> datetime | None:
@@ -154,6 +267,12 @@ def _parse_remind_at(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.astimezone()
     return parsed.astimezone(timezone.utc)
+
+
+def _parse_date(value: str) -> date | None:
+    if not value.strip():
+        return None
+    return date.fromisoformat(value.strip())
 
 
 def _now() -> datetime:

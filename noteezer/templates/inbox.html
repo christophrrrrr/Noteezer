@@ -5,6 +5,9 @@
   <form method="post" action="/logout"><button type="submit">Log out</button></form>
 </nav>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="get" action="/inbox">
+  <input name="q" placeholder="Search" value="{{ query }}">
+</form>
 <form method="post" action="/inbox">
   <textarea name="body" placeholder="Write a line" required>{{ body }}</textarea>
   <select name="kind">
@@ -15,6 +18,9 @@
     <option value="reminder" {% if kind == "reminder" %}selected{% endif %}>Reminder</option>
   </select>
   <input name="remind_at" type="datetime-local" value="{{ remind_at }}">
+  <label><input name="repeat_daily" type="checkbox" value="1" {% if repeat_daily %}checked{% endif %}> Every day</label>
+  <input name="repeat_until" type="date" value="{{ repeat_until }}">
+  <input name="q" type="hidden" value="{{ query }}">
   <button type="submit">Save</button>
 </form>
 <ul>
@@ -23,11 +29,50 @@
     <div>{{ item.body }}</div>
     <div class="meta">
       {{ item.kind }}
+      {% if item.task_done %} · done{% endif %}
       {% if item.tags %} · {% for tag in item.tags %}#{{ tag }} {% endfor %}{% endif %}
       {% if item.status %}
         · <span class="{% if item.status == 'due' %}due{% endif %}">{{ item.status }} {{ item.remind_at }}</span>
       {% endif %}
+      {% if item.repeat_daily %}
+        · daily{% if item.repeat_until %} until {{ item.repeat_until }}{% endif %}
+      {% endif %}
     </div>
+    <div class="actions">
+      {% if item.kind == "task" or item.kind == "reminder" %}
+      <form method="post" action="/items/{{ item.id }}/done">
+        <input name="q" type="hidden" value="{{ query }}">
+        <button class="secondary" type="submit">{% if item.task_done %}Undo{% else %}Done{% endif %}</button>
+      </form>
+      {% endif %}
+      {% if item.kind == "reminder" and item.status != "done" %}
+      <form method="post" action="/items/{{ item.id }}/snooze">
+        <input name="q" type="hidden" value="{{ query }}">
+        <button class="secondary" type="submit">Snooze 1 hour</button>
+      </form>
+      {% endif %}
+      <form method="post" action="/items/{{ item.id }}/delete">
+        <input name="q" type="hidden" value="{{ query }}">
+        <button class="danger" type="submit">Delete</button>
+      </form>
+    </div>
+    <details>
+      <summary>Edit</summary>
+      <form method="post" action="/items/{{ item.id }}/edit">
+        <textarea name="body" required>{{ item.body }}</textarea>
+        <select name="kind">
+          <option value="note" {% if item.kind == "note" %}selected{% endif %}>Note</option>
+          <option value="task" {% if item.kind == "task" %}selected{% endif %}>Task</option>
+          <option value="link" {% if item.kind == "link" %}selected{% endif %}>Link</option>
+          <option value="reminder" {% if item.kind == "reminder" %}selected{% endif %}>Reminder</option>
+        </select>
+        <input name="remind_at" type="datetime-local" value="{{ item.remind_local or '' }}">
+        <label><input name="repeat_daily" type="checkbox" value="1" {% if item.repeat_daily %}checked{% endif %}> Every day</label>
+        <input name="repeat_until" type="date" value="{{ item.repeat_until or '' }}">
+        <input name="q" type="hidden" value="{{ query }}">
+        <button type="submit">Save edit</button>
+      </form>
+    </details>
   </li>
   {% else %}
   <li class="meta">Nothing saved yet.</li>
