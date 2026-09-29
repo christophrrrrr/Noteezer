@@ -6,3 +6,4 @@ __pycache__/
 htmlcov/
 *.db
 .env
+assignment_1.md

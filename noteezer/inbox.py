@@ -2,6 +2,7 @@ import sqlite3
 from datetime import date, datetime, timezone
 
 from noteezer.classify import ClassificationError, classify
+from noteezer.folders import require_folder
 from noteezer.reminders import refresh, schedule
 
 
@@ -14,8 +15,11 @@ def save_item(
     forced_kind: str | None = None,
     repeat_daily: bool = False,
     repeat_until: date | None = None,
+    folder_id: int | None = None,
 ) -> int:
     classified = classify(body, forced_kind)
+    if folder_id is not None:
+        require_folder(connection, user_id, folder_id)
     _check_reminder(classified.kind, remind_at, repeat_daily, repeat_until)
     if classified.kind != "reminder":
         repeat_daily = False
@@ -23,10 +27,10 @@ def save_item(
     stamp = now.astimezone(timezone.utc).isoformat()
     cursor = connection.execute(
         """
-        INSERT INTO items (user_id, body, kind, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO items (user_id, folder_id, body, kind, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (user_id, classified.body, classified.kind, stamp, stamp),
+        (user_id, folder_id, classified.body, classified.kind, stamp, stamp),
     )
     item_id = int(cursor.lastrowid)
     _attach_tags(connection, user_id, item_id, classified.tags)
@@ -83,6 +87,30 @@ def delete_item(connection: sqlite3.Connection, user_id: int, item_id: int) -> N
     connection.commit()
 
 
+def move_item(
+    connection: sqlite3.Connection,
+    user_id: int,
+    item_id: int,
+    folder_id: int | None,
+) -> None:
+    _owned_item(connection, user_id, item_id)
+    if folder_id is not None:
+        require_folder(connection, user_id, folder_id)
+    connection.execute(
+        "UPDATE items SET folder_id = ? WHERE id = ? AND user_id = ?",
+        (folder_id, item_id, user_id),
+    )
+    connection.commit()
+
+
+def count_by_folder(connection: sqlite3.Connection, user_id: int) -> dict[int | None, int]:
+    rows = connection.execute(
+        "SELECT folder_id, COUNT(*) AS total FROM items WHERE user_id = ? GROUP BY folder_id",
+        (user_id,),
+    ).fetchall()
+    return {row["folder_id"]: int(row["total"]) for row in rows}
+
+
 def set_task_done(
     connection: sqlite3.Connection,
     user_id: int,
@@ -104,17 +132,24 @@ def list_items(
     user_id: int,
     query: str = "",
     now: datetime | None = None,
+    folder_id: int | None = None,
+    unsorted: bool = False,
 ) -> list[dict]:
     if now is not None:
         refresh(connection, user_id, now)
     sql = """
-        SELECT i.id, i.body, i.kind, i.task_done, i.created_at,
+        SELECT i.id, i.folder_id, i.body, i.kind, i.task_done, i.created_at,
                r.remind_at, r.status, r.repeat_daily, r.repeat_until
         FROM items i
         LEFT JOIN reminders r ON r.item_id = i.id
         WHERE i.user_id = ?
     """
     parameters: list[object] = [user_id]
+    if unsorted:
+        sql += " AND i.folder_id IS NULL"
+    elif folder_id is not None:
+        sql += " AND i.folder_id = ?"
+        parameters.append(folder_id)
     cleaned = query.strip()
     if cleaned:
         sql += " AND i.body LIKE ? ESCAPE '\\'"
@@ -139,6 +174,7 @@ def list_items(
     return [
         {
             "id": int(row["id"]),
+            "folder_id": row["folder_id"],
             "body": row["body"],
             "kind": row["kind"],
             "task_done": bool(row["task_done"]),

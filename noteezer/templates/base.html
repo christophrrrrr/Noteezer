@@ -25,6 +25,22 @@
     .danger { background: #8a2b1b; }
     details { margin-top: 0.5rem; }
     label { display: flex; gap: 0.4rem; align-items: center; }
+    h2 { font-size: 1.25rem; margin: 0 0 0.75rem; }
+    nav.top { margin-bottom: 1rem; }
+    .layout { display: flex; flex-direction: column; gap: 1rem; }
+    section { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+    .tree { display: flex; flex-direction: column; margin: 0.5rem 0; }
+    .tree a { display: flex; justify-content: space-between; padding: 0.45rem 0.5rem; border-radius: 0.4rem; color: inherit; text-decoration: none; }
+    .tree a.active { background: #e8e3d8; font-weight: 700; }
+    .count { color: #5c574e; font-size: 0.85rem; }
+    .subfolders { gap: 0.4rem; }
+    .row select { flex: 1; }
+    @media (min-width: 52rem) {
+      main { max-width: 60rem; }
+      .layout { flex-direction: row; align-items: flex-start; }
+      aside { width: 16rem; flex-shrink: 0; position: sticky; top: 1rem; }
+      section { flex: 1; }
+    }
   </style>
 </head>
 <body>

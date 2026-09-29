@@ -24,3 +24,28 @@ def test_register_then_save_shows_the_sorted_line(tmp_path: Path, monkeypatch) -
         assert "buy milk #home" in page.text
         assert "task" in page.text
         assert "#home" in page.text
+
+
+def test_folder_page_saves_into_that_folder(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SESSION_SECRET", "test-secret")
+    with TestClient(create_app()) as client:
+        client.post("/register", data={"email": "a@example.com", "password": "password1"})
+        created = client.post("/folders", data={"name": "Movies", "parent": ""}, follow_redirects=False)
+        assert created.status_code == 303
+        folder_url = created.headers["location"]
+        assert folder_url.startswith("/inbox?folder=")
+        folder_id = folder_url.split("=")[1]
+
+        client.post("/inbox", data={"body": "Dune part 3", "folder": folder_id})
+        client.post("/inbox", data={"body": "loose thought", "folder": ""})
+        inside = client.get(folder_url)
+        assert "Dune part 3" in inside.text
+        assert "loose thought" not in inside.text
+        unsorted = client.get("/inbox?folder=unsorted")
+        assert "loose thought" in unsorted.text
+        assert "Dune part 3" not in unsorted.text
+
+        duplicate = client.post("/folders", data={"name": "movies", "parent": ""})
+        assert duplicate.status_code == 400
+        assert "already a folder" in duplicate.text

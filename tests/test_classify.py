@@ -45,3 +45,9 @@ def test_empty_line_is_rejected() -> None:
 def test_unknown_kind_is_rejected() -> None:
     with pytest.raises(ClassificationError):
         classify("hello", forced_kind="folder")
+
+
+def test_idea_prefix_is_an_idea() -> None:
+    assert classify("Idea: king of the hill map").kind == "idea"
+    assert classify("todo write the idea down").kind == "task"
+    assert classify("ideas are cheap").kind == "note"

@@ -18,6 +18,8 @@ Decision: Inbox owns the text, kind, tags, search, edit, delete, and task comple
 Alternatives considered: One `notes` table with an optional `remind_at` column was rejected because reminders would not have their own responsibility or data. Making tags the second domain was rejected because the behaviour the user needs next is due, snooze, and done, which is a schedule, not a label.
 Consequences: Assignment 2 can run reminders as its own service that stores item ids and due times, while inbox keeps the text. Lock-screen delivery can sit on the reminder side later without changing how lines are captured.
 
+Updated: 2026-09-29. Folders are a third area in `noteezer/folders.py` that owns the folder tree: create, rename, move, delete, and the rule that a folder cannot move inside itself. Inbox stores which folder an item is in, but the only call it makes into folders is `require_folder(user_id, folder_id)` before it saves or moves an item. This is where automatic sorting will live, so it can later become its own service next to reminders.
+
 ## [3]. How inbox rows relate to reminder rows
 
 Date: 2026-09-26
@@ -28,3 +30,5 @@ Alternatives considered: An optional `remind_at` column on `items` was rejected 
 Consequences: Deleting an item deletes its reminder and tag links. The database diagram is `users` to `items` and `tags`, `items` to `item_tags` to `tags`, and `items` to `reminders` one-to-one. `schedule(item_id, when)` is the only write from inbox into reminders.
 
 Updated: 2026-09-28. A daily reminder stores `repeat_daily` and an optional `repeat_until` on the same reminder row. `remind_at` is the next occurrence, not a copy of the text. Marking it done moves `remind_at` forward one day until that end date, or until it is turned off when no end date is set.
+
+Updated: 2026-09-29. `folders` has `parent_id` pointing at another folder, so folders nest like Notion pages. A unique index on user, parent, and name (ignoring case) stops two sibling folders with the same name. The same name in different parents is allowed. `items.folder_id` is optional, and no folder means Unsorted. Deleting a folder deletes its subfolders (`ON DELETE CASCADE`), but items are never deleted with a folder: `ON DELETE SET NULL` moves them to Unsorted. The kind of an item (note, idea, task, link, reminder) stays separate from its folder, because a Game folder holds both tasks and ideas. Older databases are rebuilt once on startup because SQLite cannot change the kind CHECK in place. Rejected: storing a folder path as text on the item, because renaming or moving a folder would then need to rewrite every item.

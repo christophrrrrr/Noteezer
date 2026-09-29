@@ -1,81 +1,164 @@
 {% extends "base.html" %}
 {% block body %}
-<nav>
+<nav class="top">
   <h1>Noteezer</h1>
-  <form method="post" action="/logout"><button type="submit">Log out</button></form>
+  <form method="post" action="/logout"><button class="secondary" type="submit">Log out</button></form>
 </nav>
-{% if error %}<p class="error">{{ error }}</p>{% endif %}
-<form method="get" action="/inbox">
-  <input name="q" placeholder="Search" value="{{ query }}">
-</form>
-<form method="post" action="/inbox">
-  <textarea name="body" placeholder="Write a line" required>{{ body }}</textarea>
-  <select name="kind">
-    <option value="" {% if kind == "" %}selected{% endif %}>Sort it for me</option>
-    <option value="note" {% if kind == "note" %}selected{% endif %}>Note</option>
-    <option value="task" {% if kind == "task" %}selected{% endif %}>Task</option>
-    <option value="link" {% if kind == "link" %}selected{% endif %}>Link</option>
-    <option value="reminder" {% if kind == "reminder" %}selected{% endif %}>Reminder</option>
-  </select>
-  <input name="remind_at" type="datetime-local" value="{{ remind_at }}">
-  <label><input name="repeat_daily" type="checkbox" value="1" {% if repeat_daily %}checked{% endif %}> Every day</label>
-  <input name="repeat_until" type="date" value="{{ repeat_until }}">
-  <input name="q" type="hidden" value="{{ query }}">
-  <button type="submit">Save</button>
-</form>
-<ul>
-  {% for item in items %}
-  <li class="item">
-    <div>{{ item.body }}</div>
-    <div class="meta">
-      {{ item.kind }}
-      {% if item.task_done %} · done{% endif %}
-      {% if item.tags %} · {% for tag in item.tags %}#{{ tag }} {% endfor %}{% endif %}
-      {% if item.status %}
-        · <span class="{% if item.status == 'due' %}due{% endif %}">{{ item.status }} {{ item.remind_at }}</span>
-      {% endif %}
-      {% if item.repeat_daily %}
-        · daily{% if item.repeat_until %} until {{ item.repeat_until }}{% endif %}
-      {% endif %}
-    </div>
-    <div class="actions">
-      {% if item.kind == "task" or item.kind == "reminder" %}
-      <form method="post" action="/items/{{ item.id }}/done">
-        <input name="q" type="hidden" value="{{ query }}">
-        <button class="secondary" type="submit">{% if item.task_done %}Undo{% else %}Done{% endif %}</button>
-      </form>
-      {% endif %}
-      {% if item.kind == "reminder" and item.status != "done" %}
-      <form method="post" action="/items/{{ item.id }}/snooze">
-        <input name="q" type="hidden" value="{{ query }}">
-        <button class="secondary" type="submit">Snooze 1 hour</button>
-      </form>
-      {% endif %}
-      <form method="post" action="/items/{{ item.id }}/delete">
-        <input name="q" type="hidden" value="{{ query }}">
-        <button class="danger" type="submit">Delete</button>
-      </form>
-    </div>
-    <details>
-      <summary>Edit</summary>
-      <form method="post" action="/items/{{ item.id }}/edit">
-        <textarea name="body" required>{{ item.body }}</textarea>
-        <select name="kind">
-          <option value="note" {% if item.kind == "note" %}selected{% endif %}>Note</option>
-          <option value="task" {% if item.kind == "task" %}selected{% endif %}>Task</option>
-          <option value="link" {% if item.kind == "link" %}selected{% endif %}>Link</option>
-          <option value="reminder" {% if item.kind == "reminder" %}selected{% endif %}>Reminder</option>
+<div class="layout">
+  <aside>
+    <details open>
+      <summary>Folders</summary>
+      <div class="tree">
+        <a href="/inbox" class="{% if folder == '' %}active{% endif %}">Everything <span class="count">{{ total_count }}</span></a>
+        <a href="/inbox?folder=unsorted" class="{% if folder == 'unsorted' %}active{% endif %}">Unsorted <span class="count">{{ unsorted_count }}</span></a>
+        {% for entry in folders %}
+        <a href="/inbox?folder={{ entry.id }}" style="padding-left: {{ 0.5 + entry.depth * 1.1 }}rem" class="{% if current and entry.id == current.id %}active{% endif %}">{{ entry.name }} <span class="count">{{ entry.count }}</span></a>
+        {% endfor %}
+      </div>
+      <form method="post" action="/folders">
+        <input name="name" placeholder="New folder" maxlength="60" required>
+        <select name="parent" aria-label="Inside">
+          <option value="">Top level</option>
+          {% for entry in folders %}
+          <option value="{{ entry.id }}" {% if current and entry.id == current.id %}selected{% endif %}>{{ entry.path }}</option>
+          {% endfor %}
         </select>
-        <input name="remind_at" type="datetime-local" value="{{ item.remind_local or '' }}">
-        <label><input name="repeat_daily" type="checkbox" value="1" {% if item.repeat_daily %}checked{% endif %}> Every day</label>
-        <input name="repeat_until" type="date" value="{{ item.repeat_until or '' }}">
-        <input name="q" type="hidden" value="{{ query }}">
-        <button type="submit">Save edit</button>
+        <input name="folder" type="hidden" value="{{ folder }}">
+        <button type="submit">Add folder</button>
       </form>
     </details>
-  </li>
-  {% else %}
-  <li class="meta">Nothing saved yet.</li>
-  {% endfor %}
-</ul>
+  </aside>
+
+  <section>
+    <h2>{{ view }}</h2>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+    {% if current %}
+    <details>
+      <summary>Folder settings</summary>
+      <form method="post" action="/folders/{{ current.id }}/rename">
+        <input name="name" value="{{ current.name }}" maxlength="60" required>
+        <button type="submit">Rename</button>
+      </form>
+      <form method="post" action="/folders/{{ current.id }}/move">
+        <select name="parent" aria-label="Move inside">
+          <option value="">Top level</option>
+          {% for entry in folders %}
+          {% if entry.id != current.id %}
+          <option value="{{ entry.id }}" {% if entry.id == current.parent_id %}selected{% endif %}>{{ entry.path }}</option>
+          {% endif %}
+          {% endfor %}
+        </select>
+        <button type="submit">Move folder</button>
+      </form>
+      <form method="post" action="/folders/{{ current.id }}/delete" onsubmit="return confirm('Delete this folder and its subfolders? The items inside move to Unsorted.')">
+        <button class="danger" type="submit">Delete folder</button>
+      </form>
+    </details>
+    {% endif %}
+
+    {% if subfolders %}
+    <ul class="subfolders">
+      {% for entry in subfolders %}
+      <li><a href="/inbox?folder={{ entry.id }}">{{ entry.name }}</a> <span class="meta">{{ entry.count }}</span></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    <form method="get" action="/inbox">
+      <input name="q" placeholder="Search" value="{{ query }}">
+      <input name="folder" type="hidden" value="{{ folder }}">
+    </form>
+    <form method="post" action="/inbox">
+      <textarea name="body" placeholder="Write a line" required>{{ draft.body }}</textarea>
+      <select name="kind">
+        <option value="" {% if draft.kind == "" %}selected{% endif %}>Sort it for me</option>
+        <option value="note" {% if draft.kind == "note" %}selected{% endif %}>Note</option>
+        <option value="idea" {% if draft.kind == "idea" %}selected{% endif %}>Idea</option>
+        <option value="task" {% if draft.kind == "task" %}selected{% endif %}>Task</option>
+        <option value="link" {% if draft.kind == "link" %}selected{% endif %}>Link</option>
+        <option value="reminder" {% if draft.kind == "reminder" %}selected{% endif %}>Reminder</option>
+      </select>
+      <input name="remind_at" type="datetime-local" value="{{ draft.remind_at }}">
+      <label><input name="repeat_daily" type="checkbox" value="1" {% if draft.repeat_daily %}checked{% endif %}> Every day</label>
+      <input name="repeat_until" type="date" value="{{ draft.repeat_until }}">
+      <input name="q" type="hidden" value="{{ query }}">
+      <input name="folder" type="hidden" value="{{ folder }}">
+      <button type="submit">Save{% if current %} to {{ current.name }}{% endif %}</button>
+    </form>
+
+    <ul>
+      {% for item in items %}
+      <li class="item">
+        <div>{{ item.body }}</div>
+        <div class="meta">
+          {{ item.kind }}
+          {% if item.task_done %} · done{% endif %}
+          {% if not current %} · {{ item.folder_path or "Unsorted" }}{% endif %}
+          {% if item.tags %} · {% for tag in item.tags %}#{{ tag }} {% endfor %}{% endif %}
+          {% if item.status %}
+            · <span class="{% if item.status == 'due' %}due{% endif %}">{{ item.status }} {{ item.remind_at }}</span>
+          {% endif %}
+          {% if item.repeat_daily %}
+            · daily{% if item.repeat_until %} until {{ item.repeat_until }}{% endif %}
+          {% endif %}
+        </div>
+        <div class="actions">
+          {% if item.kind == "task" or item.kind == "reminder" %}
+          <form method="post" action="/items/{{ item.id }}/done">
+            <input name="q" type="hidden" value="{{ query }}">
+            <input name="folder" type="hidden" value="{{ folder }}">
+            <button class="secondary" type="submit">{% if item.task_done %}Undo{% else %}Done{% endif %}</button>
+          </form>
+          {% endif %}
+          {% if item.kind == "reminder" and item.status != "done" %}
+          <form method="post" action="/items/{{ item.id }}/snooze">
+            <input name="q" type="hidden" value="{{ query }}">
+            <input name="folder" type="hidden" value="{{ folder }}">
+            <button class="secondary" type="submit">Snooze 1 hour</button>
+          </form>
+          {% endif %}
+          <form method="post" action="/items/{{ item.id }}/delete">
+            <input name="q" type="hidden" value="{{ query }}">
+            <input name="folder" type="hidden" value="{{ folder }}">
+            <button class="danger" type="submit">Delete</button>
+          </form>
+        </div>
+        <form class="row" method="post" action="/items/{{ item.id }}/move">
+          <select name="target" aria-label="Move to">
+            <option value="">Unsorted</option>
+            {% for entry in folders %}
+            <option value="{{ entry.id }}" {% if entry.id == item.folder_id %}selected{% endif %}>{{ entry.path }}</option>
+            {% endfor %}
+          </select>
+          <input name="q" type="hidden" value="{{ query }}">
+          <input name="folder" type="hidden" value="{{ folder }}">
+          <button class="secondary" type="submit">Move</button>
+        </form>
+        <details>
+          <summary>Edit</summary>
+          <form method="post" action="/items/{{ item.id }}/edit">
+            <textarea name="body" required>{{ item.body }}</textarea>
+            <select name="kind">
+              <option value="note" {% if item.kind == "note" %}selected{% endif %}>Note</option>
+              <option value="idea" {% if item.kind == "idea" %}selected{% endif %}>Idea</option>
+              <option value="task" {% if item.kind == "task" %}selected{% endif %}>Task</option>
+              <option value="link" {% if item.kind == "link" %}selected{% endif %}>Link</option>
+              <option value="reminder" {% if item.kind == "reminder" %}selected{% endif %}>Reminder</option>
+            </select>
+            <input name="remind_at" type="datetime-local" value="{{ item.remind_local or '' }}">
+            <label><input name="repeat_daily" type="checkbox" value="1" {% if item.repeat_daily %}checked{% endif %}> Every day</label>
+            <input name="repeat_until" type="date" value="{{ item.repeat_until or '' }}">
+            <input name="q" type="hidden" value="{{ query }}">
+            <input name="folder" type="hidden" value="{{ folder }}">
+            <button type="submit">Save edit</button>
+          </form>
+        </details>
+      </li>
+      {% else %}
+      <li class="meta">Nothing here yet.</li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
 {% endblock %}

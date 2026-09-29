@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import RedirectResponse
@@ -8,12 +8,29 @@ from fastapi.templating import Jinja2Templates
 
 from noteezer.classify import ClassificationError
 from noteezer.db import connect
-from noteezer.inbox import delete_item, list_items, save_item, set_task_done, update_item
+from noteezer.folders import (
+    FolderError,
+    create_folder,
+    delete_folder,
+    list_folders,
+    move_folder,
+    rename_folder,
+)
+from noteezer.inbox import (
+    count_by_folder,
+    delete_item,
+    list_items,
+    move_item,
+    save_item,
+    set_task_done,
+    update_item,
+)
 from noteezer.reminders import complete, snooze
 from noteezer.sessions import COOKIE_NAME, read_user_id, sign_user_id
 from noteezer.users import AccountError, authenticate, register_user
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
+UNSORTED = "unsorted"
 
 
 def register_routes(app: FastAPI) -> None:
@@ -62,11 +79,11 @@ def register_routes(app: FastAPI) -> None:
         return response
 
     @app.get("/inbox")
-    def inbox_form(request: Request, q: str = ""):
+    def inbox_form(request: Request, q: str = "", folder: str = ""):
         user_id = _current_user(request)
         if user_id is None:
             return RedirectResponse("/login", status_code=303)
-        return _render_inbox(request, user_id, q, "", "", "", False, "", None)
+        return _render_inbox(request, user_id, q, folder)
 
     @app.post("/inbox")
     def inbox_save(
@@ -77,6 +94,7 @@ def register_routes(app: FastAPI) -> None:
         repeat_daily: str = Form(""),
         repeat_until: str = Form(""),
         q: str = Form(""),
+        folder: str = Form(""),
     ):
         user_id = _current_user(request)
         if user_id is None:
@@ -93,14 +111,14 @@ def register_routes(app: FastAPI) -> None:
                 forced_kind=kind or None,
                 repeat_daily=daily,
                 repeat_until=_parse_date(repeat_until),
+                folder_id=_folder_id(folder),
             )
-        except (ClassificationError, ValueError) as error:
-            return _render_inbox(
-                request, user_id, q, body, kind, remind_at, daily, repeat_until, str(error), status_code=400
-            )
+        except (ClassificationError, ValueError, LookupError) as error:
+            draft = _draft(body, kind, remind_at, daily, repeat_until)
+            return _render_inbox(request, user_id, q, folder, draft, _message(error), status_code=400)
         finally:
             connection.close()
-        return _inbox_redirect(q)
+        return _inbox_redirect(q, folder)
 
     @app.post("/items/{item_id}/edit")
     def edit_item(
@@ -112,6 +130,7 @@ def register_routes(app: FastAPI) -> None:
         repeat_daily: str = Form(""),
         repeat_until: str = Form(""),
         q: str = Form(""),
+        folder: str = Form(""),
     ):
         user_id = _current_user(request)
         if user_id is None:
@@ -130,16 +149,36 @@ def register_routes(app: FastAPI) -> None:
                 repeat_until=_parse_date(repeat_until),
             )
         except LookupError:
-            return RedirectResponse("/inbox", status_code=303)
+            return _inbox_redirect(q, folder)
         except (ClassificationError, ValueError) as error:
-            return _render_inbox(request, user_id, q, body, kind, remind_at, False, "", str(error), status_code=400)
+            return _render_inbox(request, user_id, q, folder, None, str(error), status_code=400)
         finally:
             connection.close()
-        return _inbox_redirect(q)
+        return _inbox_redirect(q, folder)
+
+    @app.post("/items/{item_id}/move")
+    def move_item_route(
+        request: Request,
+        item_id: int,
+        target: str = Form(""),
+        q: str = Form(""),
+        folder: str = Form(""),
+    ):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            move_item(connection, user_id, item_id, _folder_id(target))
+        except (LookupError, ValueError):
+            pass
+        finally:
+            connection.close()
+        return _inbox_redirect(q, folder)
 
     @app.post("/items/{item_id}/delete")
-    def remove_item(request: Request, item_id: int, q: str = Form("")):
-        user_id = _require_user(request)
+    def remove_item(request: Request, item_id: int, q: str = Form(""), folder: str = Form("")):
+        user_id = _current_user(request)
         if user_id is None:
             return RedirectResponse("/login", status_code=303)
         connection = connect()
@@ -149,11 +188,11 @@ def register_routes(app: FastAPI) -> None:
             pass
         finally:
             connection.close()
-        return _inbox_redirect(q)
+        return _inbox_redirect(q, folder)
 
     @app.post("/items/{item_id}/done")
-    def mark_done(request: Request, item_id: int, q: str = Form("")):
-        user_id = _require_user(request)
+    def mark_done(request: Request, item_id: int, q: str = Form(""), folder: str = Form("")):
+        user_id = _current_user(request)
         if user_id is None:
             return RedirectResponse("/login", status_code=303)
         connection = connect()
@@ -170,11 +209,11 @@ def register_routes(app: FastAPI) -> None:
                 complete(connection, user_id, item_id, _now())
         finally:
             connection.close()
-        return _inbox_redirect(q)
+        return _inbox_redirect(q, folder)
 
     @app.post("/items/{item_id}/snooze")
-    def snooze_item(request: Request, item_id: int, q: str = Form("")):
-        user_id = _require_user(request)
+    def snooze_item(request: Request, item_id: int, q: str = Form(""), folder: str = Form("")):
+        user_id = _current_user(request)
         if user_id is None:
             return RedirectResponse("/login", status_code=303)
         connection = connect()
@@ -184,42 +223,141 @@ def register_routes(app: FastAPI) -> None:
             pass
         finally:
             connection.close()
-        return _inbox_redirect(q)
+        return _inbox_redirect(q, folder)
+
+    @app.post("/folders")
+    def folder_create(
+        request: Request,
+        name: str = Form(""),
+        parent: str = Form(""),
+        folder: str = Form(""),
+    ):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            created = create_folder(connection, user_id, name, _now(), parent_id=_folder_id(parent))
+        except (FolderError, LookupError, ValueError) as error:
+            return _render_inbox(request, user_id, "", folder, None, _message(error), status_code=400)
+        finally:
+            connection.close()
+        return _inbox_redirect("", str(created))
+
+    @app.post("/folders/{folder_id}/rename")
+    def folder_rename(request: Request, folder_id: int, name: str = Form("")):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            rename_folder(connection, user_id, folder_id, name)
+        except FolderError as error:
+            return _render_inbox(request, user_id, "", str(folder_id), None, str(error), status_code=400)
+        except LookupError:
+            return _inbox_redirect("", "")
+        finally:
+            connection.close()
+        return _inbox_redirect("", str(folder_id))
+
+    @app.post("/folders/{folder_id}/move")
+    def folder_move(request: Request, folder_id: int, parent: str = Form("")):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            move_folder(connection, user_id, folder_id, _folder_id(parent))
+        except FolderError as error:
+            return _render_inbox(request, user_id, "", str(folder_id), None, str(error), status_code=400)
+        except (LookupError, ValueError):
+            return _inbox_redirect("", "")
+        finally:
+            connection.close()
+        return _inbox_redirect("", str(folder_id))
+
+    @app.post("/folders/{folder_id}/delete")
+    def folder_delete(request: Request, folder_id: int):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            delete_folder(connection, user_id, folder_id)
+        except LookupError:
+            pass
+        finally:
+            connection.close()
+        return _inbox_redirect("", "")
 
 
 def _render_inbox(
     request: Request,
     user_id: int,
     query: str,
-    body: str,
-    kind: str,
-    remind_at: str,
-    repeat_daily: bool,
-    repeat_until: str,
-    error: str | None,
+    folder: str,
+    draft: dict | None = None,
+    error: str | None = None,
     status_code: int = 200,
 ):
+    unsorted = folder == UNSORTED
+    try:
+        folder_id = None if unsorted else _folder_id(folder)
+    except ValueError:
+        folder_id = None
     connection = connect()
     try:
-        items = list_items(connection, user_id, query, _now())
+        folders = list_folders(connection, user_id)
+        counts = count_by_folder(connection, user_id)
+        current = next((entry for entry in folders if entry["id"] == folder_id), None)
+        if folder_id is not None and current is None:
+            folder_id = None
+        items = list_items(connection, user_id, query, _now(), folder_id=folder_id, unsorted=unsorted)
     finally:
         connection.close()
+    for entry in folders:
+        entry["count"] = counts.get(entry["id"], 0)
+    names = {entry["id"]: entry["path"] for entry in folders}
+    for item in items:
+        item["folder_path"] = names.get(item["folder_id"], "")
+    if current is not None:
+        view = current["path"]
+        view_key = str(current["id"])
+    elif unsorted:
+        view = "Unsorted"
+        view_key = UNSORTED
+    else:
+        view = "Everything"
+        view_key = ""
     return TEMPLATES.TemplateResponse(
         request,
         "inbox.html",
         {
-            "title": "Inbox",
+            "title": view,
             "items": items,
-            "body": body,
-            "kind": kind,
-            "remind_at": remind_at,
-            "repeat_daily": repeat_daily,
-            "repeat_until": repeat_until,
+            "folders": folders,
+            "current": current,
+            "subfolders": [entry for entry in folders if current and entry["parent_id"] == current["id"]],
+            "view": view,
+            "folder": view_key,
+            "unsorted_count": counts.get(None, 0),
+            "total_count": sum(counts.values()),
+            "draft": draft or _draft("", "", "", False, ""),
             "query": query,
             "error": error,
         },
         status_code=status_code,
     )
+
+
+def _draft(body: str, kind: str, remind_at: str, repeat_daily: bool, repeat_until: str) -> dict:
+    return {
+        "body": body,
+        "kind": kind,
+        "remind_at": remind_at,
+        "repeat_daily": repeat_daily,
+        "repeat_until": repeat_until,
+    }
 
 
 def _account_page(request: Request, title: str, other_href: str, other_label: str, email: str, error: str | None):
@@ -245,19 +383,34 @@ def _logged_in(user_id: int) -> RedirectResponse:
     return response
 
 
-def _inbox_redirect(query: str) -> RedirectResponse:
-    target = "/inbox"
+def _inbox_redirect(query: str, folder: str) -> RedirectResponse:
+    parameters = {}
+    if folder.strip():
+        parameters["folder"] = folder.strip()
     if query.strip():
-        target = "/inbox?q=" + quote(query.strip())
+        parameters["q"] = query.strip()
+    target = "/inbox"
+    if parameters:
+        target += "?" + urlencode(parameters)
     return RedirectResponse(target, status_code=303)
+
+
+def _message(error: Exception) -> str:
+    if isinstance(error, LookupError):
+        return "That folder no longer exists."
+    return str(error)
 
 
 def _current_user(request: Request) -> int | None:
     return read_user_id(request.cookies.get(COOKIE_NAME))
 
 
-def _require_user(request: Request) -> int | None:
-    return _current_user(request)
+def _folder_id(value: str) -> int | None:
+    # "" and "unsorted" both mean no folder. Anything else must be a folder id.
+    cleaned = value.strip()
+    if not cleaned or cleaned == UNSORTED:
+        return None
+    return int(cleaned)
 
 
 def _parse_remind_at(value: str) -> datetime | None:

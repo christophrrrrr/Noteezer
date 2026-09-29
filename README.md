@@ -14,6 +14,8 @@ One person who currently pastes notes into a chat with themselves and later sear
 
 **Inbox.** Saves the line, assigns a kind, keeps tags, and supports search, edit, delete, and marking a task done.
 
+**Folders.** Nested folders like Notion pages (Projects / Game / Cannon Circle). Create, rename, move, and delete them. An item without a folder is in Unsorted. Deleting a folder moves its items to Unsorted, never deletes them. Inbox only calls `require_folder(user_id, folder_id)` before it puts an item in a folder.
+
 **Reminders.** Stores when an item is due and whether it is scheduled, due, snoozed, or done. It does not store the item text. Inbox saves the item, then calls `schedule(item_id, when)` when a time was picked.
 
 ## How a line is sorted
@@ -21,9 +23,11 @@ One person who currently pastes notes into a chat with themselves and later sear
 - The Reminder button, or a line that starts with `remind`, requires a picked date and time and becomes a reminder.
 - A URL becomes a link.
 - A line that starts with `todo` or `buy` becomes a task.
+- A line that starts with `idea` becomes an idea.
 - Anything else becomes a note.
 - `#words` become tags on any kind.
-- Note, Task, Link, and Reminder buttons override that guess.
+- Note, Idea, Task, Link, and Reminder buttons override that guess.
+- The kind is separate from the folder. Saving while a folder is open puts the line in that folder. Otherwise it goes to Unsorted.
 
 Times are chosen with a picker. The app does not parse phrases like "friday 3pm".
 
@@ -52,10 +56,10 @@ The process listens on `0.0.0.0` and port `8000`, or `PORT` if that variable is 
 
 Open `http://127.0.0.1:8000/register`, create an account, and save a line. A line that starts with `todo` or `buy` becomes a task, a URL becomes a link, and `remind` or the Reminder choice becomes a reminder that needs the date picker. Check Every day to repeat it, and set the date field only if it should stop. A reminder time that is already past is marked due and listed first. `#words` become tags.
 
-Core logic tests, with coverage for the inbox, reminder, account, and sorting modules:
+Core logic tests, with coverage for the inbox, folder, reminder, account, and sorting modules:
 
 ```
-pytest --cov=noteezer.classify --cov=noteezer.inbox --cov=noteezer.reminders --cov=noteezer.users --cov=noteezer.passwords --cov-report=term-missing
+pytest --cov=noteezer.classify --cov=noteezer.inbox --cov=noteezer.reminders --cov=noteezer.users --cov=noteezer.passwords --cov=noteezer.folders --cov-report=term-missing
 ```
 
-That run is 31 tests and 94% coverage on those modules.
+That run is 41 tests and 95% coverage on those modules.
