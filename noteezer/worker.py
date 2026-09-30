@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 
 from noteezer.db import connect
+from noteezer.links import fetch_preview
 from noteezer.sorting import Sorter, sort_pending
 
 log = logging.getLogger(__name__)
@@ -24,7 +25,13 @@ class SortWorker:
     def run_once(self) -> int:
         connection = connect()
         try:
-            return sort_pending(connection, self.sorter, datetime.now(timezone.utc))
+            return sort_pending(
+                connection,
+                self.sorter,
+                datetime.now(timezone.utc),
+                limit=5,
+                fetch_preview=fetch_preview,
+            )
         finally:
             connection.close()
 

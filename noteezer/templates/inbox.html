@@ -102,6 +102,12 @@
       {% for item in items %}
       <li class="item">
         <div>{{ item.body }}</div>
+        {% if item.preview %}
+        <a class="preview" href="{{ item.preview.url }}" target="_blank" rel="noopener noreferrer">
+          <strong>{{ item.preview.title }}</strong>
+          <span class="meta">{{ item.preview.site }}{% if item.preview.description %} · {{ item.preview.description }}{% endif %}</span>
+        </a>
+        {% endif %}
         <div class="meta">
           {{ item.kind }}
           {% if item.task_done %} · done{% endif %}
@@ -121,6 +127,8 @@
             Sorting…
           {% elif item.sort.status == "review" and item.sort.folder_path %}
             Suggested: {{ item.sort.folder_path }}
+          {% elif item.sort.status == "review" and item.sort.proposed_path %}
+            New folder? {{ item.sort.proposed_path }}
           {% elif item.sort.status == "review" %}
             No folder matched.
           {% elif item.sort.status == "retry" %}
@@ -136,6 +144,13 @@
             <input name="q" type="hidden" value="{{ query }}">
             <input name="folder" type="hidden" value="{{ folder }}">
             <button type="submit">Accept</button>
+          </form>
+          {% endif %}
+          {% if not item.folder_id and item.sort and item.sort.status == "review" and item.sort.proposed_path and not item.sort.folder_path %}
+          <form method="post" action="/items/{{ item.id }}/create-folder">
+            <input name="q" type="hidden" value="{{ query }}">
+            <input name="folder" type="hidden" value="{{ folder }}">
+            <button type="submit">Create folder</button>
           </form>
           {% endif %}
           {% if item.kind == "task" or item.kind == "reminder" %}

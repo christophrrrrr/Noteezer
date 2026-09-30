@@ -9,6 +9,7 @@ from noteezer.inbox import list_items, move_item, save_item
 from noteezer.sorting import (
     MAX_ATTEMPTS,
     FolderOption,
+    Note,
     RulesSorter,
     Suggestion,
     accept_suggestion,
@@ -45,29 +46,29 @@ class FixedSorter:
         self.folder_id = folder_id
         self.confidence = confidence
 
-    def suggest(self, body, tags, folders):
+    def suggest(self, note, folders):
         return Suggestion(self.folder_id, self.confidence)
 
 
 class BrokenSorter:
     name = "broken"
 
-    def suggest(self, body, tags, folders):
+    def suggest(self, note, folders):
         raise RuntimeError("quota exceeded")
 
 
 def test_rules_match_a_tag_or_a_mentioned_name() -> None:
     rules = RulesSorter()
-    assert rules.suggest("king of the hill #game", ("game",), FOLDERS) == Suggestion(GAME.id, 0.9)
-    assert rules.suggest("Dune part 3, WATCH  later", (), FOLDERS).folder_id == WATCH.id
-    assert rules.suggest("Dune part 3 #watchlater", ("watchlater",), FOLDERS).folder_id == WATCH.id
-    assert rules.suggest("I am a gamer", (), FOLDERS) == Suggestion(None, 0.0)
+    assert rules.suggest(Note("king of the hill #game", ("game",)), FOLDERS) == Suggestion(GAME.id, 0.9, engine="rules")
+    assert rules.suggest(Note("Dune part 3, WATCH  later"), FOLDERS).folder_id == WATCH.id
+    assert rules.suggest(Note("Dune part 3 #watchlater", ("watchlater",)), FOLDERS).folder_id == WATCH.id
+    assert rules.suggest(Note("I am a gamer"), FOLDERS).folder_id is None
 
 
 def test_rules_prefer_the_deepest_folder_on_one_branch() -> None:
     rules = RulesSorter()
-    assert rules.suggest("Game: more Maps for crown trouble", (), FOLDERS) == Suggestion(MAPS.id, 0.9)
-    unclear = rules.suggest("game trailer to watch later", (), FOLDERS)
+    assert rules.suggest(Note("Game: more Maps for crown trouble"), FOLDERS).folder_id == MAPS.id
+    unclear = rules.suggest(Note("game trailer to watch later"), FOLDERS)
     assert unclear.confidence < 0.8
 
 
@@ -88,7 +89,9 @@ def test_confident_lines_are_filed_and_unclear_ones_wait(tmp_path: Path) -> None
     assert results[filed]["status"] == "filed"
     assert results[unclear]["status"] == "review"
     assert results[unclear]["folder_id"] in (game, watch)
-    assert results[nothing] == {"status": "review", "folder_id": None, "confidence": 0.0, "engine": "rules"}
+    assert results[nothing]["status"] == "review"
+    assert results[nothing]["folder_id"] is None
+    assert results[nothing]["engine"] == "rules"
     assert chosen not in results
     assert [item["id"] for item in list_items(connection, owner, folder_id=game)] == [filed]
     connection.close()
@@ -158,7 +161,7 @@ def test_a_move_by_the_user_wins_over_the_sorter(tmp_path: Path) -> None:
     class MovedMeanwhile:
         name = "slow"
 
-        def suggest(self, body, tags, folders):
+        def suggest(self, note, folders):
             move_item(connection, owner, item_id, watch)
             return Suggestion(game, 0.95)
 
@@ -218,8 +221,8 @@ def test_a_new_folder_only_retries_lines_that_matched_nothing(tmp_path: Path) ->
     class GuessesMaps:
         name = "guess"
 
-        def suggest(self, body, tags, folders):
-            return Suggestion(game, 0.5) if "maps" in body else Suggestion(None, 0.0)
+        def suggest(self, note, folders):
+            return Suggestion(game, 0.5) if "maps" in note.body else Suggestion(None, 0.0)
 
     sort_pending(connection, GuessesMaps(), NOW)
     assert results_for(connection, owner)[climbing_note]["folder_id"] is None

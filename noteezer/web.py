@@ -27,7 +27,8 @@ from noteezer.inbox import (
 )
 from noteezer.reminders import complete, snooze
 from noteezer.sessions import COOKIE_NAME, read_user_id, sign_user_id
-from noteezer.sorting import accept_suggestion, requeue_unsorted, results_for
+from noteezer.links import previews_for
+from noteezer.sorting import accept_proposal, accept_suggestion, requeue_unsorted, results_for
 from noteezer.users import AccountError, authenticate, register_user
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
@@ -241,6 +242,22 @@ def register_routes(app: FastAPI) -> None:
             connection.close()
         return _inbox_redirect(q, folder)
 
+    @app.post("/items/{item_id}/create-folder")
+    def create_proposed_folder(request: Request, item_id: int, q: str = Form(""), folder: str = Form("")):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            accept_proposal(connection, user_id, item_id, _now())
+            requeue_unsorted(connection, user_id, only_unmatched=True)
+        except (LookupError, FolderError):
+            pass
+        finally:
+            connection.close()
+        _wake_sorter(request)
+        return _inbox_redirect(q, folder)
+
     @app.post("/sorting/retry")
     def sort_again(request: Request):
         user_id = _current_user(request)
@@ -347,6 +364,7 @@ def _render_inbox(
             folder_id = None
         items = list_items(connection, user_id, query, _now(), folder_id=folder_id, unsorted=unsorted)
         results = results_for(connection, user_id)
+        previews = previews_for(connection, user_id)
     finally:
         connection.close()
     for entry in folders:
@@ -354,9 +372,14 @@ def _render_inbox(
     names = {entry["id"]: entry["path"] for entry in folders}
     for item in items:
         item["folder_path"] = names.get(item["folder_id"], "")
+        item["preview"] = previews.get(item["id"])
         item["sort"] = results.get(item["id"])
         if item["sort"] is not None:
             item["sort"]["folder_path"] = names.get(item["sort"]["folder_id"], "")
+            if item["sort"]["proposed_name"]:
+                parent = names.get(item["sort"]["proposed_parent_id"])
+                name = item["sort"]["proposed_name"]
+                item["sort"]["proposed_path"] = f"{parent} / {name}" if parent else name
     if current is not None:
         view = current["path"]
         view_key = str(current["id"])

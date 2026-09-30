@@ -29,6 +29,14 @@ def init_db(connection: sqlite3.Connection) -> None:
         )
     if "repeat_until" not in columns:
         connection.execute("ALTER TABLE reminders ADD COLUMN repeat_until TEXT")
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(sort_results)")}
+    if "proposed_name" not in columns:
+        connection.execute("ALTER TABLE sort_results ADD COLUMN proposed_name TEXT")
+        connection.execute(
+            "ALTER TABLE sort_results ADD COLUMN proposed_parent_id INTEGER "
+            "REFERENCES folders(id) ON DELETE SET NULL"
+        )
+    connection.commit()
 
 
 def _add_folders_to_items(connection: sqlite3.Connection) -> None:

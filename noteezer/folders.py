@@ -87,6 +87,22 @@ def require_folder(connection: sqlite3.Connection, user_id: int, folder_id: int)
         raise LookupError("folder not found")
 
 
+def find_folder(
+    connection: sqlite3.Connection,
+    user_id: int,
+    name: str,
+    parent_id: int | None,
+) -> int | None:
+    row = connection.execute(
+        """
+        SELECT id FROM folders
+        WHERE user_id = ? AND IFNULL(parent_id, 0) = IFNULL(?, 0) AND name = ? COLLATE NOCASE
+        """,
+        (user_id, parent_id, " ".join(name.split())),
+    ).fetchone()
+    return None if row is None else int(row["id"])
+
+
 def descendant_ids(connection: sqlite3.Connection, user_id: int, folder_id: int) -> set[int]:
     rows = connection.execute(
         """
