@@ -49,6 +49,18 @@ CREATE TABLE IF NOT EXISTS reminders (
     repeat_until TEXT
 );
 
+CREATE TABLE IF NOT EXISTS sort_results (
+    item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('filed', 'review', 'accepted', 'retry', 'failed')),
+    folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
+    confidence REAL,
+    engine TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    retry_at TEXT,
+    error TEXT,
+    sorted_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_user_created ON items (user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_items_folder ON items (user_id, folder_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_sibling_name

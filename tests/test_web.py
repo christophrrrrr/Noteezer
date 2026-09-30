@@ -49,3 +49,21 @@ def test_folder_page_saves_into_that_folder(tmp_path: Path, monkeypatch) -> None
         duplicate = client.post("/folders", data={"name": "movies", "parent": ""})
         assert duplicate.status_code == 400
         assert "already a folder" in duplicate.text
+
+
+def test_a_saved_line_is_sorted_in_the_background(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SESSION_SECRET", "test-secret")
+    with TestClient(create_app()) as client:
+        client.post("/register", data={"email": "a@example.com", "password": "password1"})
+        client.post("/folders", data={"name": "Movies", "parent": ""})
+        client.post("/inbox", data={"body": "Dune part 3 #movies", "folder": ""})
+        client.post("/inbox", data={"body": "quick sort notes", "folder": ""})
+        client.app.state.sort_worker.run_once()
+
+        everything = client.get("/inbox")
+        assert "filed by rules" in everything.text
+        unsorted = client.get("/inbox?folder=unsorted")
+        assert "quick sort notes" in unsorted.text
+        assert "No folder matched." in unsorted.text
+        assert "Dune part 3" not in unsorted.text

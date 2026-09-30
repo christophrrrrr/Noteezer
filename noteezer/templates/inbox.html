@@ -57,6 +57,17 @@
     </details>
     {% endif %}
 
+    {% if folder == "unsorted" %}
+      {% if has_folders %}
+      <form method="post" action="/sorting/retry" class="row">
+        <span class="meta">New lines are sorted into your folders automatically. Anything unclear waits here.</span>
+        <button class="secondary" type="submit">Sort again</button>
+      </form>
+      {% else %}
+      <p class="meta">Create a folder and new lines will be sorted into it automatically.</p>
+      {% endif %}
+    {% endif %}
+
     {% if subfolders %}
     <ul class="subfolders">
       {% for entry in subfolders %}
@@ -102,8 +113,31 @@
           {% if item.repeat_daily %}
             · daily{% if item.repeat_until %} until {{ item.repeat_until }}{% endif %}
           {% endif %}
+          {% if item.folder_id and item.sort and item.sort.status == "filed" %} · filed by {{ item.sort.engine }}{% endif %}
         </div>
+        {% if not item.folder_id and has_folders %}
+        <div class="meta">
+          {% if not item.sort %}
+            Sorting…
+          {% elif item.sort.status == "review" and item.sort.folder_path %}
+            Suggested: {{ item.sort.folder_path }}
+          {% elif item.sort.status == "review" %}
+            No folder matched.
+          {% elif item.sort.status == "retry" %}
+            Sorting failed, trying again soon.
+          {% elif item.sort.status == "failed" %}
+            Could not be sorted.
+          {% endif %}
+        </div>
+        {% endif %}
         <div class="actions">
+          {% if not item.folder_id and item.sort and item.sort.status == "review" and item.sort.folder_path %}
+          <form method="post" action="/items/{{ item.id }}/accept">
+            <input name="q" type="hidden" value="{{ query }}">
+            <input name="folder" type="hidden" value="{{ folder }}">
+            <button type="submit">Accept</button>
+          </form>
+          {% endif %}
           {% if item.kind == "task" or item.kind == "reminder" %}
           <form method="post" action="/items/{{ item.id }}/done">
             <input name="q" type="hidden" value="{{ query }}">

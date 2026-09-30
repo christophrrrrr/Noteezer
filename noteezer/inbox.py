@@ -103,6 +103,23 @@ def move_item(
     connection.commit()
 
 
+def file_unsorted_item(
+    connection: sqlite3.Connection,
+    user_id: int,
+    item_id: int,
+    folder_id: int,
+) -> bool:
+    # Used by automatic sorting. It only files an item that is still in
+    # Unsorted, so it never undoes a move the user made in the meantime.
+    require_folder(connection, user_id, folder_id)
+    cursor = connection.execute(
+        "UPDATE items SET folder_id = ? WHERE id = ? AND user_id = ? AND folder_id IS NULL",
+        (folder_id, item_id, user_id),
+    )
+    connection.commit()
+    return cursor.rowcount == 1
+
+
 def count_by_folder(connection: sqlite3.Connection, user_id: int) -> dict[int | None, int]:
     rows = connection.execute(
         "SELECT folder_id, COUNT(*) AS total FROM items WHERE user_id = ? GROUP BY folder_id",

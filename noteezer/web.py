@@ -27,6 +27,7 @@ from noteezer.inbox import (
 )
 from noteezer.reminders import complete, snooze
 from noteezer.sessions import COOKIE_NAME, read_user_id, sign_user_id
+from noteezer.sorting import accept_suggestion, requeue_unsorted, results_for
 from noteezer.users import AccountError, authenticate, register_user
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
@@ -118,6 +119,7 @@ def register_routes(app: FastAPI) -> None:
             return _render_inbox(request, user_id, q, folder, draft, _message(error), status_code=400)
         finally:
             connection.close()
+        _wake_sorter(request)
         return _inbox_redirect(q, folder)
 
     @app.post("/items/{item_id}/edit")
@@ -225,6 +227,33 @@ def register_routes(app: FastAPI) -> None:
             connection.close()
         return _inbox_redirect(q, folder)
 
+    @app.post("/items/{item_id}/accept")
+    def accept_item(request: Request, item_id: int, q: str = Form(""), folder: str = Form("")):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            accept_suggestion(connection, user_id, item_id)
+        except LookupError:
+            pass
+        finally:
+            connection.close()
+        return _inbox_redirect(q, folder)
+
+    @app.post("/sorting/retry")
+    def sort_again(request: Request):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            requeue_unsorted(connection, user_id)
+        finally:
+            connection.close()
+        _wake_sorter(request)
+        return _inbox_redirect("", UNSORTED)
+
     @app.post("/folders")
     def folder_create(
         request: Request,
@@ -238,10 +267,12 @@ def register_routes(app: FastAPI) -> None:
         connection = connect()
         try:
             created = create_folder(connection, user_id, name, _now(), parent_id=_folder_id(parent))
+            requeue_unsorted(connection, user_id, only_unmatched=True)
         except (FolderError, LookupError, ValueError) as error:
             return _render_inbox(request, user_id, "", folder, None, _message(error), status_code=400)
         finally:
             connection.close()
+        _wake_sorter(request)
         return _inbox_redirect("", str(created))
 
     @app.post("/folders/{folder_id}/rename")
@@ -252,12 +283,14 @@ def register_routes(app: FastAPI) -> None:
         connection = connect()
         try:
             rename_folder(connection, user_id, folder_id, name)
+            requeue_unsorted(connection, user_id, only_unmatched=True)
         except FolderError as error:
             return _render_inbox(request, user_id, "", str(folder_id), None, str(error), status_code=400)
         except LookupError:
             return _inbox_redirect("", "")
         finally:
             connection.close()
+        _wake_sorter(request)
         return _inbox_redirect("", str(folder_id))
 
     @app.post("/folders/{folder_id}/move")
@@ -313,6 +346,7 @@ def _render_inbox(
         if folder_id is not None and current is None:
             folder_id = None
         items = list_items(connection, user_id, query, _now(), folder_id=folder_id, unsorted=unsorted)
+        results = results_for(connection, user_id)
     finally:
         connection.close()
     for entry in folders:
@@ -320,6 +354,9 @@ def _render_inbox(
     names = {entry["id"]: entry["path"] for entry in folders}
     for item in items:
         item["folder_path"] = names.get(item["folder_id"], "")
+        item["sort"] = results.get(item["id"])
+        if item["sort"] is not None:
+            item["sort"]["folder_path"] = names.get(item["sort"]["folder_id"], "")
     if current is not None:
         view = current["path"]
         view_key = str(current["id"])
@@ -341,6 +378,7 @@ def _render_inbox(
             "view": view,
             "folder": view_key,
             "unsorted_count": counts.get(None, 0),
+            "has_folders": bool(folders),
             "total_count": sum(counts.values()),
             "draft": draft or _draft("", "", "", False, ""),
             "query": query,
@@ -399,6 +437,10 @@ def _message(error: Exception) -> str:
     if isinstance(error, LookupError):
         return "That folder no longer exists."
     return str(error)
+
+
+def _wake_sorter(request: Request) -> None:
+    request.app.state.sort_worker.wake()
 
 
 def _current_user(request: Request) -> int | None:

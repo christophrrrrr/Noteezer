@@ -20,6 +20,8 @@ Consequences: Assignment 2 can run reminders as its own service that stores item
 
 Updated: 2026-09-29. Folders are a third area in `noteezer/folders.py` that owns the folder tree: create, rename, move, delete, and the rule that a folder cannot move inside itself. Inbox stores which folder an item is in, but the only call it makes into folders is `require_folder(user_id, folder_id)` before it saves or moves an item. This is where automatic sorting will live, so it can later become its own service next to reminders.
 
+Updated: 2026-09-30. Sorting lives in `noteezer/sorting.py` with its own `sort_results` table. Inbox does not call sorting at all: a line waits to be sorted when it is in Unsorted and has no sort result yet. Sorting reads those lines and files them only through `file_unsorted_item`, which does nothing if the user already moved the line. The engine sits behind a `Sorter` interface picked by the `SORTER` variable, so a Gemini engine can be added without touching inbox. A background task inside the same process runs the sorting, which the single-process rule allows. A message queue was rejected because it needs a second process.
+
 ## [3]. How inbox rows relate to reminder rows
 
 Date: 2026-09-26
@@ -32,3 +34,14 @@ Consequences: Deleting an item deletes its reminder and tag links. The database 
 Updated: 2026-09-28. A daily reminder stores `repeat_daily` and an optional `repeat_until` on the same reminder row. `remind_at` is the next occurrence, not a copy of the text. Marking it done moves `remind_at` forward one day until that end date, or until it is turned off when no end date is set.
 
 Updated: 2026-09-29. `folders` has `parent_id` pointing at another folder, so folders nest like Notion pages. A unique index on user, parent, and name (ignoring case) stops two sibling folders with the same name. The same name in different parents is allowed. `items.folder_id` is optional, and no folder means Unsorted. Deleting a folder deletes its subfolders (`ON DELETE CASCADE`), but items are never deleted with a folder: `ON DELETE SET NULL` moves them to Unsorted. The kind of an item (note, idea, task, link, reminder) stays separate from its folder, because a Game folder holds both tasks and ideas. Older databases are rebuilt once on startup because SQLite cannot change the kind CHECK in place. Rejected: storing a folder path as text on the item, because renaming or moving a folder would then need to rewrite every item.
+
+Updated: 2026-09-30. `sort_results` uses `item_id` as its primary key, like `reminders`, so an item has at most one sort result, and it is deleted with the item. It stores the status (filed, review, accepted, retry, failed), the suggested `folder_id`, the confidence, the engine name, and the retry count and time. If the suggested folder is deleted, `folder_id` becomes NULL and the suggestion disappears.
+
+## [4]. Testing approach
+
+Date: 2026-09-30
+Status: Decided
+Context: Grading needs at least 70% coverage of the core rules. The rules that could lose or misfile a note are the sorting decisions, the folder tree rules, and reminder status changes. The pages are thin code around those rules.
+Decision: pytest calls the domain modules (`classify`, `inbox`, `folders`, `sorting`, `reminders`, `users`, `passwords`) directly against a real SQLite file in a temporary folder. Each test passes a fixed `now` and uses fake sorter engines. Coverage is measured on those modules only, with pytest-cov. A few `TestClient` tests check that the routes are wired up.
+Alternatives considered: Mocking `sqlite3` was rejected because cascades, unique indexes, and the upgrade of old databases are rules that live in SQLite, and only a real database proves them. Browser tests were rejected because they are slow and check layout, not decisions.
+Consequences: 54 tests cover 96% of those modules. The background worker loop, the routes, and the templates are tested less: a broken route shows up in the `TestClient` tests or by hand, not in the coverage number. An engine that calls an outside API will be tested with a fake, so the tests never need a network connection or a key.
