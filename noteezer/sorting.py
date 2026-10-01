@@ -3,12 +3,13 @@ import os
 import re
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Protocol
 
 from noteezer.classify import classify
 from noteezer.folders import FolderError, create_folder, find_folder, list_folders
+from noteezer.images import Image, readable_image, record_reading
 from noteezer.inbox import (
     change_plain_note_kind,
     file_unsorted_item,
@@ -42,6 +43,7 @@ class Note:
     links: tuple[LinkPreview, ...] = ()
     kind: str = "note"
     now: datetime | None = None  # in the user's timezone, so "friday 3pm" can be read
+    image: Image | None = None  # only when the user let AI read it
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,8 @@ class Suggestion:
     kind: str | None = None
     remind_at: datetime | None = None
     parts: tuple[Part, ...] = ()
+    image_title: str | None = None
+    image_text: str | None = None
 
 
 class Sorter(Protocol):
@@ -126,8 +130,9 @@ def sort_pending(
     fetch_preview: Callable[[str], LinkPreview | None] | None = None,
 ) -> int:
     # Pending means never sorted (or due for a retry) and either still in
-    # Unsorted while the owner has a folder to sort into, or a reminder saved
-    # without a time, wherever it is. Split originals are hidden and skipped.
+    # Unsorted while the owner has a folder to sort into, a reminder saved
+    # without a time, or an image AI may read, wherever it is. Split originals
+    # are hidden and skipped.
     # fetch_preview is passed by the worker; without it no link is fetched.
     rows = connection.execute(
         """
@@ -139,6 +144,7 @@ def sort_pending(
           AND (
             (i.folder_id IS NULL AND EXISTS (SELECT 1 FROM folders f WHERE f.user_id = i.user_id))
             OR (i.kind = 'reminder' AND NOT EXISTS (SELECT 1 FROM reminders m WHERE m.item_id = i.id))
+            OR EXISTS (SELECT 1 FROM images g WHERE g.item_id = i.id AND g.ai_allowed = 1 AND g.read_at IS NULL)
           )
         ORDER BY i.id
         LIMIT ?
@@ -164,6 +170,7 @@ def sort_pending(
             links=_links(connection, item_id, row["body"], fetch_preview, now),
             kind=row["kind"],
             now=now.astimezone(zones[user_id]),
+            image=readable_image(connection, item_id),
         )
         try:
             suggestion = sorter.suggest(note, options)
@@ -171,6 +178,12 @@ def sort_pending(
             log.warning("Sorting item %s with %s failed: %s", item_id, sorter.name, error)
             _record_failure(connection, item_id, sorter.name, attempts, str(error), now)
             continue
+        if note.image is not None:
+            # What the engine read is kept with the image. A screenshot is one
+            # thing, so it is never split into parts.
+            if suggestion.image_title or suggestion.image_text:
+                record_reading(connection, user_id, item_id, suggestion.image_title, suggestion.image_text, now)
+            suggestion = replace(suggestion, parts=())
         _apply(connection, user_id, row, suggestion, options, sorter.name, attempts, now)
     return len(rows)
 

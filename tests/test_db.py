@@ -13,11 +13,11 @@ def _tables(connection: sqlite3.Connection) -> set[str]:
     return {row["name"] for row in rows}
 
 
-def test_init_creates_the_eight_tables(tmp_path: Path) -> None:
+def test_init_creates_the_nine_tables(tmp_path: Path) -> None:
     connection = connect(tmp_path / "noteezer.db")
     init_db(connection)
     assert _tables(connection) == {
-        "users", "folders", "items", "tags", "item_tags", "reminders", "sort_results", "link_previews"
+        "users", "folders", "items", "tags", "item_tags", "reminders", "sort_results", "link_previews", "images"
     }
     connection.close()
 

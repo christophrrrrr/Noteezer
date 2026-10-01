@@ -67,6 +67,16 @@ CREATE TABLE IF NOT EXISTS sort_results (
     suggested_remind_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS images (
+    item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+    mime TEXT NOT NULL,
+    data BLOB NOT NULL,
+    ai_allowed INTEGER NOT NULL DEFAULT 1,
+    title TEXT,
+    text TEXT,
+    read_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS link_previews (
     item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
     url TEXT NOT NULL,

@@ -13,6 +13,8 @@ Updated: 2026-09-30. Three runtime packages were added for AI sorting: `google-g
 
 Updated: 2026-10-01. `tzdata` was added because Windows has no timezone database of its own, and the app now reads times in each user's timezone with `zoneinfo`.
 
+Updated: 2026-10-01. Lines with an image go to `gemini-3.8-flash` instead of `gemini-3.5-flash-lite`. In testing, Flash-Lite missed the date on a poster in one of two tries and Flash read it in three of three. Text lines stay on Flash-Lite, which is faster and has more free quota.
+
 ## [2]. Inbox and reminders are separate domains
 
 Date: 2026-09-25
@@ -44,6 +46,8 @@ Updated: 2026-09-29. `folders` has `parent_id` pointing at another folder, so fo
 Updated: 2026-09-30. `sort_results` uses `item_id` as its primary key, like `reminders`, so an item has at most one sort result, and it is deleted with the item. It stores the status (filed, review, accepted, retry, failed), the suggested `folder_id`, the confidence, the engine name, and the retry count and time. If the suggested folder is deleted, `folder_id` becomes NULL and the suggestion disappears. `proposed_name` and `proposed_parent_id` hold a new folder the engine suggests. It is only created when the user taps Create folder. `link_previews` is also keyed by `item_id` and stores the title and description of a line's first link, so a link is fetched once and not again on every retry.
 
 Updated: 2026-10-01. `users.timezone` stores the browser's IANA zone, such as Europe/Madrid. `items.split_from` points a part at the line it was split from, with `ON DELETE SET NULL`, and `items.hidden` hides that original while its parts exist. Undo split deletes the parts and clears `hidden`. Deleting the original was rejected because a bad split could not be undone. `sort_results.suggested_remind_at` holds a time Gemini read from a line that is not a reminder, until the user accepts it. A reminder item may now exist without a `reminders` row while it waits for a time.
+
+Updated: 2026-10-01. `images` uses `item_id` as its primary key, so a line has at most one image, and it is deleted with the line. It stores the bytes as a BLOB, the type found by `check_image`, `ai_allowed` from the checkbox, and the `title` and `text` Gemini read. Files in a folder next to the database were rejected: the assignment wants one documented SQLite path, and a folder of files could keep images whose line is gone. The cost is a larger database file; images are capped at 10 MB.
 
 ## [4]. Testing approach
 

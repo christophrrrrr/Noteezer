@@ -273,8 +273,13 @@ def list_items(
         parameters.append(folder_id)
     cleaned = query.strip()
     if cleaned:
-        sql += " AND i.body LIKE ? ESCAPE '\\'"
-        parameters.append(_like(cleaned))
+        sql += """
+            AND (i.body LIKE ? ESCAPE '\\' OR EXISTS (
+                SELECT 1 FROM images g
+                WHERE g.item_id = i.id AND (g.title LIKE ? ESCAPE '\\' OR g.text LIKE ? ESCAPE '\\')
+            ))
+        """
+        parameters += [_like(cleaned)] * 3
     sql += " ORDER BY CASE WHEN r.status = 'due' THEN 0 ELSE 1 END, i.created_at DESC"
     rows = connection.execute(sql, parameters).fetchall()
     tags_by_item: dict[int, list[str]] = {int(row["id"]): [] for row in rows}

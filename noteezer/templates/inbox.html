@@ -80,8 +80,10 @@
       <input name="q" placeholder="Search" value="{{ query }}">
       <input name="folder" type="hidden" value="{{ folder }}">
     </form>
-    <form method="post" action="/inbox">
-      <textarea name="body" placeholder="Write a line" required>{{ draft.body }}</textarea>
+    <form method="post" action="/inbox" enctype="multipart/form-data" data-capture>
+      <textarea name="body" placeholder="Write a line, or paste a screenshot">{{ draft.body }}</textarea>
+      <input name="image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Image">
+      <label><input name="ai_image" type="checkbox" value="1" checked> Let AI read this image</label>
       <select name="kind">
         <option value="" {% if draft.kind == "" %}selected{% endif %}>Sort it for me</option>
         <option value="note" {% if draft.kind == "note" %}selected{% endif %}>Note</option>
@@ -102,6 +104,13 @@
       {% for item in items %}
       <li class="item">
         <div>{{ item.body }}</div>
+        {% if item.image %}
+        <a href="/items/{{ item.id }}/image" target="_blank" rel="noopener">
+          <img class="shot" src="/items/{{ item.id }}/image" alt="{{ item.image.title or 'Saved image' }}" loading="lazy">
+        </a>
+        {% if item.image.text %}<p class="meta image-text">{{ item.image.text }}</p>{% endif %}
+        {% if not item.image.ai_allowed %}<p class="meta">Private image: not read by AI.</p>{% endif %}
+        {% endif %}
         {% if item.preview %}
         <a class="preview" href="{{ item.preview.url }}" target="_blank" rel="noopener noreferrer">
           <strong>{{ item.preview.title }}</strong>
@@ -229,4 +238,19 @@
     </ul>
   </section>
 </div>
+<script>
+  // A screenshot pasted into the capture box is attached to the image field.
+  document.querySelectorAll("form[data-capture]").forEach(function (form) {
+    var input = form.querySelector("input[type=file]");
+    form.addEventListener("paste", function (event) {
+      var files = event.clipboardData ? Array.from(event.clipboardData.files) : [];
+      var picture = files.find(function (file) { return file.type.indexOf("image/") === 0; });
+      if (!picture || !input) return;
+      var transfer = new DataTransfer();
+      transfer.items.add(picture);
+      input.files = transfer.files;
+      event.preventDefault();
+    });
+  });
+</script>
 {% endblock %}

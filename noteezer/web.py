@@ -2,8 +2,8 @@ from datetime import date, datetime, timezone, tzinfo
 from pathlib import Path
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from noteezer.classify import ClassificationError
@@ -27,6 +27,7 @@ from noteezer.inbox import (
 )
 from noteezer.reminders import complete, snooze
 from noteezer.sessions import COOKIE_NAME, read_user_id, sign_user_id
+from noteezer.images import MAX_BYTES, PLACEHOLDER, ImageError, attach_image, check_image, image_for, images_for
 from noteezer.links import previews_for
 from noteezer.sorting import (
     accept_proposal,
@@ -109,15 +110,22 @@ def register_routes(app: FastAPI) -> None:
         q: str = Form(""),
         folder: str = Form(""),
         tz: str = Form(""),
+        image: UploadFile | None = File(None),
+        ai_image: str = Form(""),
     ):
         user_id = _current_user(request)
         if user_id is None:
             return RedirectResponse("/login", status_code=303)
         daily = repeat_daily == "1"
+        picture = _uploaded(image)
         connection = connect()
         try:
+            if picture is not None:
+                check_image(picture)
+                if not body.strip():
+                    body = PLACEHOLDER
             zone = _zone(connection, user_id, tz)
-            save_item(
+            item_id = save_item(
                 connection,
                 user_id,
                 body,
@@ -128,13 +136,37 @@ def register_routes(app: FastAPI) -> None:
                 repeat_until=_parse_date(repeat_until),
                 folder_id=_folder_id(folder),
             )
-        except (ClassificationError, ValueError, LookupError) as error:
+            if picture is not None:
+                attach_image(connection, item_id, picture, ai_allowed=ai_image == "1")
+        except (ClassificationError, ValueError, LookupError, ImageError) as error:
+            if body == PLACEHOLDER:
+                body = ""
             draft = _draft(body, kind, remind_at, daily, repeat_until)
             return _render_inbox(request, user_id, q, folder, draft, _message(error), status_code=400)
         finally:
             connection.close()
         _wake_sorter(request)
         return _inbox_redirect(q, folder)
+
+    @app.get("/items/{item_id}/image")
+    def item_image(request: Request, item_id: int):
+        user_id = _current_user(request)
+        if user_id is None:
+            return Response(status_code=404)
+        connection = connect()
+        try:
+            picture = image_for(connection, user_id, item_id)
+        finally:
+            connection.close()
+        if picture is None:
+            return Response(status_code=404)
+        # The type comes from check_image, never from the upload, and nosniff
+        # stops the browser from guessing a different one.
+        return Response(
+            picture.data,
+            media_type=picture.mime,
+            headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400"},
+        )
 
     @app.post("/items/{item_id}/edit")
     def edit_item(
@@ -413,6 +445,7 @@ def _render_inbox(
         )
         results = results_for(connection, user_id)
         previews = previews_for(connection, user_id)
+        pictures = images_for(connection, user_id)
     finally:
         connection.close()
     for entry in folders:
@@ -421,6 +454,7 @@ def _render_inbox(
     for item in items:
         item["folder_path"] = names.get(item["folder_id"], "")
         item["preview"] = previews.get(item["id"])
+        item["image"] = pictures.get(item["id"])
         item["sort"] = results.get(item["id"])
         if item["sort"] is not None:
             item["sort"]["folder_path"] = names.get(item["sort"]["folder_id"], "")
@@ -509,6 +543,14 @@ def _message(error: Exception) -> str:
     if isinstance(error, LookupError):
         return "That folder no longer exists."
     return str(error)
+
+
+def _uploaded(upload: UploadFile | None) -> bytes | None:
+    # An empty file field still arrives as an upload with no name and no bytes.
+    if upload is None or not upload.filename:
+        return None
+    data = upload.file.read(MAX_BYTES + 1)
+    return data or None
 
 
 def _wake_sorter(request: Request) -> None:
