@@ -22,21 +22,25 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 def init_db(connection: sqlite3.Connection) -> None:
     _add_folders_to_items(connection)
     connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-    columns = {row["name"] for row in connection.execute("PRAGMA table_info(reminders)")}
-    if "repeat_daily" not in columns:
-        connection.execute(
-            "ALTER TABLE reminders ADD COLUMN repeat_daily INTEGER NOT NULL DEFAULT 0"
-        )
-    if "repeat_until" not in columns:
-        connection.execute("ALTER TABLE reminders ADD COLUMN repeat_until TEXT")
-    columns = {row["name"] for row in connection.execute("PRAGMA table_info(sort_results)")}
-    if "proposed_name" not in columns:
-        connection.execute("ALTER TABLE sort_results ADD COLUMN proposed_name TEXT")
-        connection.execute(
-            "ALTER TABLE sort_results ADD COLUMN proposed_parent_id INTEGER "
-            "REFERENCES folders(id) ON DELETE SET NULL"
-        )
+    # Columns added after a table first shipped. CREATE TABLE IF NOT EXISTS
+    # does not change a table that already exists, so older files get them here.
+    _add_column(connection, "reminders", "repeat_daily", "INTEGER NOT NULL DEFAULT 0")
+    _add_column(connection, "reminders", "repeat_until", "TEXT")
+    _add_column(connection, "sort_results", "proposed_name", "TEXT")
+    _add_column(
+        connection, "sort_results", "proposed_parent_id", "INTEGER REFERENCES folders(id) ON DELETE SET NULL"
+    )
+    _add_column(connection, "sort_results", "suggested_remind_at", "TEXT")
+    _add_column(connection, "users", "timezone", "TEXT")
+    _add_column(connection, "items", "split_from", "INTEGER REFERENCES items(id) ON DELETE SET NULL")
+    _add_column(connection, "items", "hidden", "INTEGER NOT NULL DEFAULT 0")
     connection.commit()
+
+
+def _add_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _add_folders_to_items(connection: sqlite3.Connection) -> None:

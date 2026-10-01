@@ -1,6 +1,7 @@
 import re
 import sqlite3
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from noteezer.passwords import hash_password, verify_password
 
@@ -45,6 +46,30 @@ def authenticate(connection: sqlite3.Connection, email: str, password: str) -> i
     if row is None or not verify_password(password, row["password_hash"]):
         return None
     return int(row["id"])
+
+
+def set_timezone(connection: sqlite3.Connection, user_id: int, name: str) -> bool:
+    # The browser sends its IANA zone name, like Europe/Madrid. Anything that is
+    # not a known zone is ignored, so a bad value cannot break reminders.
+    cleaned = name.strip()
+    try:
+        ZoneInfo(cleaned)
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    connection.execute(
+        "UPDATE users SET timezone = ? WHERE id = ? AND IFNULL(timezone, '') != ?",
+        (cleaned, user_id, cleaned),
+    )
+    connection.commit()
+    return True
+
+
+def user_timezone(connection: sqlite3.Connection, user_id: int) -> ZoneInfo:
+    row = connection.execute("SELECT timezone FROM users WHERE id = ?", (user_id,)).fetchone()
+    try:
+        return ZoneInfo(row["timezone"]) if row is not None and row["timezone"] else ZoneInfo("UTC")
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo("UTC")
 
 
 def _iso(moment: datetime) -> str:

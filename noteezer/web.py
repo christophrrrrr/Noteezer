@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, tzinfo
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -28,8 +28,16 @@ from noteezer.inbox import (
 from noteezer.reminders import complete, snooze
 from noteezer.sessions import COOKIE_NAME, read_user_id, sign_user_id
 from noteezer.links import previews_for
-from noteezer.sorting import accept_proposal, accept_suggestion, requeue_unsorted, results_for
-from noteezer.users import AccountError, authenticate, register_user
+from noteezer.sorting import (
+    accept_proposal,
+    accept_reminder,
+    accept_suggestion,
+    requeue_unsorted,
+    resort_if_waiting,
+    results_for,
+    undo_auto_split,
+)
+from noteezer.users import AccountError, authenticate, register_user, set_timezone, user_timezone
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
 UNSORTED = "unsorted"
@@ -47,10 +55,11 @@ def register_routes(app: FastAPI) -> None:
         return _account_page(request, "Create account", "/login", "Log in instead", "", None)
 
     @app.post("/register")
-    def register(request: Request, email: str = Form(""), password: str = Form("")):
+    def register(request: Request, email: str = Form(""), password: str = Form(""), tz: str = Form("")):
         connection = connect()
         try:
             user_id = register_user(connection, email, password, _now())
+            set_timezone(connection, user_id, tz)
         except AccountError as error:
             return _account_page(request, "Create account", "/login", "Log in instead", email, str(error))
         finally:
@@ -62,10 +71,12 @@ def register_routes(app: FastAPI) -> None:
         return _account_page(request, "Log in", "/register", "Create an account", "", None)
 
     @app.post("/login")
-    def login(request: Request, email: str = Form(""), password: str = Form("")):
+    def login(request: Request, email: str = Form(""), password: str = Form(""), tz: str = Form("")):
         connection = connect()
         try:
             user_id = authenticate(connection, email, password)
+            if user_id is not None:
+                set_timezone(connection, user_id, tz)
         finally:
             connection.close()
         if user_id is None:
@@ -97,6 +108,7 @@ def register_routes(app: FastAPI) -> None:
         repeat_until: str = Form(""),
         q: str = Form(""),
         folder: str = Form(""),
+        tz: str = Form(""),
     ):
         user_id = _current_user(request)
         if user_id is None:
@@ -104,11 +116,12 @@ def register_routes(app: FastAPI) -> None:
         daily = repeat_daily == "1"
         connection = connect()
         try:
+            zone = _zone(connection, user_id, tz)
             save_item(
                 connection,
                 user_id,
                 body,
-                _parse_remind_at(remind_at),
+                _parse_remind_at(remind_at, zone),
                 _now(),
                 forced_kind=kind or None,
                 repeat_daily=daily,
@@ -134,29 +147,33 @@ def register_routes(app: FastAPI) -> None:
         repeat_until: str = Form(""),
         q: str = Form(""),
         folder: str = Form(""),
+        tz: str = Form(""),
     ):
         user_id = _current_user(request)
         if user_id is None:
             return RedirectResponse("/login", status_code=303)
         connection = connect()
         try:
+            zone = _zone(connection, user_id, tz)
             update_item(
                 connection,
                 user_id,
                 item_id,
                 body,
-                _parse_remind_at(remind_at),
+                _parse_remind_at(remind_at, zone),
                 _now(),
                 forced_kind=kind or None,
                 repeat_daily=repeat_daily == "1",
                 repeat_until=_parse_date(repeat_until),
             )
+            resort_if_waiting(connection, user_id, item_id)
         except LookupError:
             return _inbox_redirect(q, folder)
         except (ClassificationError, ValueError) as error:
             return _render_inbox(request, user_id, q, folder, None, str(error), status_code=400)
         finally:
             connection.close()
+        _wake_sorter(request)
         return _inbox_redirect(q, folder)
 
     @app.post("/items/{item_id}/move")
@@ -256,6 +273,34 @@ def register_routes(app: FastAPI) -> None:
         finally:
             connection.close()
         _wake_sorter(request)
+        return _inbox_redirect(q, folder)
+
+    @app.post("/items/{item_id}/remind")
+    def set_suggested_reminder(request: Request, item_id: int, q: str = Form(""), folder: str = Form("")):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            accept_reminder(connection, user_id, item_id, _now())
+        except (LookupError, ValueError, ClassificationError):
+            pass
+        finally:
+            connection.close()
+        return _inbox_redirect(q, folder)
+
+    @app.post("/items/{item_id}/unsplit")
+    def undo_split_route(request: Request, item_id: int, q: str = Form(""), folder: str = Form("")):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            undo_auto_split(connection, user_id, item_id)
+        except LookupError:
+            pass
+        finally:
+            connection.close()
         return _inbox_redirect(q, folder)
 
     @app.post("/sorting/retry")
@@ -362,7 +407,10 @@ def _render_inbox(
         current = next((entry for entry in folders if entry["id"] == folder_id), None)
         if folder_id is not None and current is None:
             folder_id = None
-        items = list_items(connection, user_id, query, _now(), folder_id=folder_id, unsorted=unsorted)
+        zone = user_timezone(connection, user_id)
+        items = list_items(
+            connection, user_id, query, _now(), folder_id=folder_id, unsorted=unsorted, zone=zone
+        )
         results = results_for(connection, user_id)
         previews = previews_for(connection, user_id)
     finally:
@@ -376,6 +424,7 @@ def _render_inbox(
         item["sort"] = results.get(item["id"])
         if item["sort"] is not None:
             item["sort"]["folder_path"] = names.get(item["sort"]["folder_id"], "")
+            item["sort"]["remind_label"] = _label(item["sort"]["suggested_remind_at"], zone)
             if item["sort"]["proposed_name"]:
                 parent = names.get(item["sort"]["proposed_parent_id"])
                 name = item["sort"]["proposed_name"]
@@ -478,13 +527,30 @@ def _folder_id(value: str) -> int | None:
     return int(cleaned)
 
 
-def _parse_remind_at(value: str) -> datetime | None:
+def _zone(connection, user_id: int, browser_zone: str) -> tzinfo:
+    # The page sends the browser's timezone with every form, so the account
+    # follows the user when they travel. A missing or unknown value keeps the
+    # one already stored.
+    set_timezone(connection, user_id, browser_zone)
+    return user_timezone(connection, user_id)
+
+
+def _parse_remind_at(value: str, zone: tzinfo) -> datetime | None:
+    # The date picker sends local wall time without an offset. It is read in
+    # the user's timezone, not the server's, which is UTC once deployed.
     if not value.strip():
         return None
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
-        parsed = parsed.astimezone()
+        parsed = parsed.replace(tzinfo=zone)
     return parsed.astimezone(timezone.utc)
+
+
+def _label(value: str | None, zone: tzinfo) -> str:
+    if not value:
+        return ""
+    local = datetime.fromisoformat(value).astimezone(zone)
+    return f"{local:%a} {local.day} {local:%b}, {local:%H:%M}"
 
 
 def _parse_date(value: str) -> date | None:

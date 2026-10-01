@@ -67,3 +67,26 @@ def test_a_saved_line_is_sorted_in_the_background(tmp_path: Path, monkeypatch) -
         assert "quick sort notes" in unsorted.text
         assert "No folder matched." in unsorted.text
         assert "Dune part 3" not in unsorted.text
+
+
+def test_the_date_picker_is_read_in_the_browser_timezone(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SESSION_SECRET", "test-secret")
+    with TestClient(create_app()) as client:
+        client.post(
+            "/register",
+            data={"email": "a@example.com", "password": "password1", "tz": "Europe/Madrid"},
+        )
+        client.post(
+            "/inbox",
+            data={"body": "remind call mom", "remind_at": "2026-12-05T15:00", "tz": "Europe/Madrid"},
+        )
+        page = client.get("/inbox")
+        assert "Sat 5 Dec, 15:00" in page.text
+
+        from noteezer.db import connect
+
+        connection = connect()
+        stored = connection.execute("SELECT remind_at FROM reminders").fetchone()["remind_at"]
+        connection.close()
+        assert stored.startswith("2026-12-05T14:00:00")

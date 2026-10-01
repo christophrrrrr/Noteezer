@@ -4,7 +4,8 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    timezone TEXT
 );
 
 CREATE TABLE IF NOT EXISTS folders (
@@ -24,6 +25,8 @@ CREATE TABLE IF NOT EXISTS items (
     task_done INTEGER NOT NULL DEFAULT 0 CHECK (task_done IN (0, 1)),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    split_from INTEGER REFERENCES items(id) ON DELETE SET NULL,
+    hidden INTEGER NOT NULL DEFAULT 0,
     CHECK (kind = 'task' OR task_done = 0)
 );
 
@@ -60,7 +63,8 @@ CREATE TABLE IF NOT EXISTS sort_results (
     error TEXT,
     sorted_at TEXT NOT NULL,
     proposed_name TEXT,
-    proposed_parent_id INTEGER REFERENCES folders(id) ON DELETE SET NULL
+    proposed_parent_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
+    suggested_remind_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS link_previews (

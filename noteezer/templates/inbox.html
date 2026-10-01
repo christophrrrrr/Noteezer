@@ -114,12 +114,15 @@
           {% if not current %} · {{ item.folder_path or "Unsorted" }}{% endif %}
           {% if item.tags %} · {% for tag in item.tags %}#{{ tag }} {% endfor %}{% endif %}
           {% if item.status %}
-            · <span class="{% if item.status == 'due' %}due{% endif %}">{{ item.status }} {{ item.remind_at }}</span>
+            · <span class="{% if item.status == 'due' %}due{% endif %}">{{ item.status }} {{ item.remind_label }}</span>
+          {% elif item.kind == "reminder" %}
+            · no time yet{% if not item.sort %}, reading it from the text…{% else %}, pick one under Edit{% endif %}
           {% endif %}
           {% if item.repeat_daily %}
             · daily{% if item.repeat_until %} until {{ item.repeat_until }}{% endif %}
           {% endif %}
           {% if item.folder_id and item.sort and item.sort.status == "filed" %} · filed by {{ item.sort.engine }}{% endif %}
+          {% if item.split_from %} · split from a longer note{% endif %}
         </div>
         {% if not item.folder_id and has_folders %}
         <div class="meta">
@@ -135,6 +138,8 @@
             Sorting failed, trying again soon.
           {% elif item.sort.status == "failed" %}
             Could not be sorted.
+          {% elif item.sort.status == "accepted" %}
+            Kept as one note. Move it when you like.
           {% endif %}
         </div>
         {% endif %}
@@ -151,6 +156,20 @@
             <input name="q" type="hidden" value="{{ query }}">
             <input name="folder" type="hidden" value="{{ folder }}">
             <button type="submit">Create folder</button>
+          </form>
+          {% endif %}
+          {% if item.sort and item.sort.remind_label and item.kind != "reminder" %}
+          <form method="post" action="/items/{{ item.id }}/remind">
+            <input name="q" type="hidden" value="{{ query }}">
+            <input name="folder" type="hidden" value="{{ folder }}">
+            <button type="submit">Remind me {{ item.sort.remind_label }}</button>
+          </form>
+          {% endif %}
+          {% if item.split_from %}
+          <form method="post" action="/items/{{ item.id }}/unsplit" onsubmit="return confirm('Put the original note back and remove all of its parts?')">
+            <input name="q" type="hidden" value="{{ query }}">
+            <input name="folder" type="hidden" value="{{ folder }}">
+            <button class="secondary" type="submit">Undo split</button>
           </form>
           {% endif %}
           {% if item.kind == "task" or item.kind == "reminder" %}

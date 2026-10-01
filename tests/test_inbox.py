@@ -58,12 +58,16 @@ def test_past_reminder_is_saved_as_due_and_listed_first(tmp_path: Path) -> None:
     connection.close()
 
 
-def test_reminder_without_a_time_is_rejected(tmp_path: Path) -> None:
+def test_reminder_without_a_time_waits_for_one(tmp_path: Path) -> None:
     connection = _db(tmp_path)
     owner = _user(connection)
+    save_item(connection, owner, "remind call landlord friday", None, NOW)
+    listed = list_items(connection, owner)
+    assert listed[0]["kind"] == "reminder"
+    assert listed[0]["status"] is None
     with pytest.raises(ClassificationError):
-        save_item(connection, owner, "remind call landlord", None, NOW)
-    assert list_items(connection, owner) == []
+        save_item(connection, owner, "remind stretch", None, NOW, repeat_daily=True)
+    assert len(list_items(connection, owner)) == 1
     connection.close()
 
 

@@ -2,7 +2,7 @@
 
 Noteezer is a phone-friendly capture app for the notes, tasks, links, and reminders that would otherwise be messages sent to yourself.
 
-You type one line and save it. Optional buttons can force the kind. A reminder also needs a date and time from a picker. The app stores everything in SQLite and shows what is due when you open it.
+You type one line and save it. Optional buttons can force the kind. A reminder takes its time from a picker or, with Gemini, from the text itself. The app stores everything in SQLite and shows what is due when you open it.
 
 The use case is approved. You can register, save a line, search it, edit it, delete it, and mark a task done. A reminder can be a single time or every day from a start time until an optional end date. Snooze hides it for one hour. Marking a daily reminder done moves it to the next day.
 
@@ -16,7 +16,7 @@ One person who currently pastes notes into a chat with themselves and later sear
 
 **Folders.** Nested folders like Notion pages (Projects / Game / Cannon Circle). Create, rename, move, and delete them. An item without a folder is in Unsorted. Deleting a folder moves its items to Unsorted, never deletes them. Inbox only calls `require_folder(user_id, folder_id)` before it puts an item in a folder.
 
-**Sorting.** Files new lines from Unsorted into a folder in the background. First the title of a line's link is fetched: YouTube through oEmbed, other pages from their `<head>`. Links that point into a private network are refused. The rules come next: a line that names a folder or has its name as a `#tag`, including in a link title, goes there, and the deepest matching folder wins. If the rules are not sure and `GEMINI_API_KEY` is set, Gemini picks a folder with a confidence, or proposes a new folder. Calls are spaced 4 seconds apart to stay inside the free tier. A confident answer is filed and marked "filed by rules" or "filed by gemini". An unclear line stays in Unsorted with a suggestion (Accept) or a proposed folder (Create folder). Failed calls are retried with a growing wait. Creating or renaming a folder retries the lines that matched nothing, and Sort again retries everything in Unsorted.
+**Sorting.** Files new lines from Unsorted into a folder in the background. First the title of a line's link is fetched: YouTube through oEmbed, other pages from their `<head>`. Links that point into a private network are refused. The rules come next: a line that names a folder or has its name as a `#tag`, including in a link title, goes there, and the deepest matching folder wins. If the rules are not sure and `GEMINI_API_KEY` is set, Gemini picks a folder with a confidence, or proposes a new folder. A `#tag` or folder name the rules find still decides the folder, because that is the user's own choice, but Gemini is asked for every line so it can also read times and kinds. Calls are spaced 4 seconds apart to stay inside the free tier. A confident answer is filed and marked "filed by rules" or "filed by gemini". An unclear line stays in Unsorted with a suggestion (Accept) or a proposed folder (Create folder). Failed calls are retried with a growing wait. Gemini also turns a plain note into a task or an idea; links, reminders, and lines with a `todo`, `buy`, or `idea` prefix keep their kind. A note that holds several separate points, like a list of bugs under a heading, is split into one item per point, and each part is sorted on its own. The original is hidden, not deleted, and Undo split on any part brings it back. Creating or renaming a folder retries the lines that matched nothing, and Sort again retries everything in Unsorted.
 
 **Reminders.** Stores when an item is due and whether it is scheduled, due, snoozed, or done. It does not store the item text. Inbox saves the item, then calls `schedule(item_id, when)` when a time was picked.
 
@@ -31,7 +31,7 @@ One person who currently pastes notes into a chat with themselves and later sear
 - Note, Idea, Task, Link, and Reminder buttons override that guess.
 - The kind is separate from the folder. Saving while a folder is open puts the line in that folder. Otherwise it goes to Unsorted.
 
-Times are chosen with a picker. The app does not parse phrases like "friday 3pm".
+Without Gemini, times come only from the picker. With Gemini, a line that starts with `remind` can be saved without the picker: "remind me friday 3pm call mom" is scheduled once the sorter has read it, and until then it shows "no time yet". Other lines with a time, like "dentist tuesday 10:00", get a "Remind me Tue 6 Oct, 10:00" button instead of a reminder. Every form sends the browser's timezone, which is stored on the account, so the picker and phrases like "friday" are read in the user's time. The server's own clock is UTC once deployed.
 
 ## In this assignment
 
@@ -64,4 +64,4 @@ Core logic tests, with coverage for the inbox, folder, sorting, link preview, Ge
 pytest --cov=noteezer.classify --cov=noteezer.inbox --cov=noteezer.reminders --cov=noteezer.users --cov=noteezer.passwords --cov=noteezer.folders --cov=noteezer.sorting --cov=noteezer.links --cov=noteezer.gemini --cov-report=term-missing
 ```
 
-That run is 73 tests and 96% coverage on those modules.
+That run is 82 tests and 96% coverage on those modules.

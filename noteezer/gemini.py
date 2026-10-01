@@ -2,9 +2,11 @@ import json
 import os
 import time
 from collections.abc import Callable
+from dataclasses import replace
+from datetime import datetime, timezone, tzinfo
 
 from noteezer.links import TLS_CONTEXT
-from noteezer.sorting import FILE_AT, FolderOption, NewFolder, Note, RulesSorter, Suggestion
+from noteezer.sorting import FILE_AT, FolderOption, NewFolder, Note, Part, RulesSorter, Suggestion
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 MIN_INTERVAL_SECONDS = 4.0  # the free tier allows about 15 requests a minute
@@ -22,6 +24,18 @@ Answer with:
   cover. Give a short name (1 to 3 words, Title Case, in the language of the existing folder
   names) and parent_id, the id of the folder it belongs inside, or null for the top level.
   Otherwise null.
+- kind: "task" for something to do, "idea" for something to try, build, or think about later,
+  otherwise "note".
+- remind_at: when the note asks to be reminded, or names an appointment or deadline on a day,
+  the local date and time as YYYY-MM-DDTHH:MM, worked out from Now. Use 09:00 when only a day
+  is given. Otherwise null.
+- parts: split the note when it holds two or more separate points, each on its own line or
+  bullet: bugs to fix, tasks, ideas, or different topics. Each point becomes one part, so the
+  user can file, finish, or delete it on its own. Keep the user's own words. When the points sit
+  under a heading like "Cannon Circle:", start each part with it, for example
+  "Cannon Circle: bigger cannon balls". Give each part its own kind, folder_id, and confidence.
+  Use an empty list for one thought, a single sentence, or lines that only make sense together,
+  like a shopping list or an address.
 
 A wrong folder is worse than no folder: the user checks Unsorted and moves things by hand.
 Do not pick a folder only because it is the closest one. When the note is about one specific
@@ -43,18 +57,37 @@ RESPONSE_SCHEMA = {
             },
             "required": ["name", "parent_id"],
         },
+        "kind": {"type": "string", "enum": ["note", "idea", "task"]},
+        "remind_at": {"type": ["string", "null"]},
+        "parts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["note", "idea", "task"]},
+                    "folder_id": {"type": ["integer", "null"]},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["text", "kind", "folder_id", "confidence"],
+            },
+        },
     },
-    "required": ["folder_id", "confidence", "new_folder"],
+    "required": ["folder_id", "confidence", "new_folder", "kind", "remind_at", "parts"],
 }
+
+KINDS = ("note", "idea", "task")
 
 Generate = Callable[[str, str], str]
 
 
 class GeminiSorter:
-    """Sorts with Gemini when the rules are not sure.
+    """Sorts with Gemini: folder, kind, reminder time, and splitting.
 
-    `generate(system, prompt)` returns the model's JSON text. The real one is
-    built by `from_env`; tests pass a fake so they never call the API.
+    An explicit #tag or folder name found by the rules still decides the
+    folder, because that is the user's own choice. `generate(system, prompt)`
+    returns the model's JSON text. The real one is built by `from_env`; tests
+    pass a fake so they never call the API.
     """
 
     name = "gemini"
@@ -80,10 +113,12 @@ class GeminiSorter:
 
     def suggest(self, note: Note, folders: list[FolderOption]) -> Suggestion:
         rules = self._rules.suggest(note, folders)
-        if rules.confidence >= FILE_AT:
-            return rules  # a clear #tag or folder name needs no API call
         self._wait_turn()
-        return parse_answer(self._generate(SYSTEM, build_prompt(note, folders)), folders)
+        zone = note.now.tzinfo if note.now is not None else None
+        answer = parse_answer(self._generate(SYSTEM, build_prompt(note, folders)), folders, zone)
+        if rules.confidence >= FILE_AT:
+            answer = replace(answer, folder_id=rules.folder_id, confidence=rules.confidence, new_folder=None)
+        return answer
 
     def _wait_turn(self) -> None:
         if self._last_call is not None:
@@ -94,16 +129,17 @@ class GeminiSorter:
 
 
 def build_prompt(note: Note, folders: list[FolderOption]) -> str:
-    lines = ["Folders:"]
+    now = note.now or datetime.now(timezone.utc)
+    lines = [f"Now: {now:%A %Y-%m-%d %H:%M} ({now.tzinfo})", "", "Folders:"]
     lines += [f"{folder.id}: {folder.path}" for folder in folders]
-    lines += ["", "Note:", note.body]
+    lines += ["", f"Saved as: {note.kind}", "Note:", note.body]
     for link in note.links:
         about = f"{link.title} - {link.description}" if link.description else link.title
         lines.append(f"Link ({link.site}): {about}")
     return "\n".join(lines)
 
 
-def parse_answer(raw: str, folders: list[FolderOption]) -> Suggestion:
+def parse_answer(raw: str, folders: list[FolderOption], zone: tzinfo | None = None) -> Suggestion:
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("the model did not answer with an object")
@@ -111,10 +147,7 @@ def parse_answer(raw: str, folders: list[FolderOption]) -> Suggestion:
     folder_id = data.get("folder_id")
     if not isinstance(folder_id, int) or folder_id not in known:
         folder_id = None
-    try:
-        confidence = min(max(float(data.get("confidence") or 0), 0.0), 1.0)
-    except (TypeError, ValueError):
-        confidence = 0.0
+    confidence = _confidence(data.get("confidence"))
     proposal = None
     new_folder = data.get("new_folder")
     if folder_id is None and isinstance(new_folder, dict):
@@ -129,7 +162,58 @@ def parse_answer(raw: str, folders: list[FolderOption]) -> Suggestion:
                 folder_id = existing.id
             else:
                 proposal = NewFolder(name, parent_id)
-    return Suggestion(folder_id, confidence, proposal, engine="gemini")
+    return Suggestion(
+        folder_id,
+        confidence,
+        proposal,
+        engine="gemini",
+        kind=data.get("kind") if data.get("kind") in KINDS else None,
+        remind_at=_local_time(data.get("remind_at"), zone),
+        parts=_parts(data.get("parts"), known),
+    )
+
+
+def _parts(raw: object, known: dict[int, FolderOption]) -> tuple[Part, ...]:
+    if not isinstance(raw, list):
+        return ()
+    parts = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        text = str(entry.get("text") or "").strip()
+        if not text:
+            continue
+        folder_id = entry.get("folder_id")
+        parts.append(
+            Part(
+                text=text,
+                kind=entry.get("kind") if entry.get("kind") in KINDS else None,
+                folder_id=folder_id if isinstance(folder_id, int) and folder_id in known else None,
+                confidence=_confidence(entry.get("confidence")),
+            )
+        )
+    return tuple(parts) if len(parts) >= 2 else ()
+
+
+def _local_time(raw: object, zone: tzinfo | None) -> datetime | None:
+    # The model answers in the user's local time without an offset, which is
+    # easier for it than UTC. It is turned into UTC here.
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.strip())
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=zone or timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _confidence(raw: object) -> float:
+    try:
+        return min(max(float(raw or 0), 0.0), 1.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _client_call(model: str, api_key: str) -> Generate:

@@ -11,6 +11,8 @@ Consequences: Dependencies stay at FastAPI, Uvicorn, Jinja2, and the test tools.
 
 Updated: 2026-09-30. Three runtime packages were added for AI sorting: `google-genai` for Gemini, `httpx` to read link titles, and `python-dotenv` so `python app.py` can read an optional `.env` file. Gemini's free tier was chosen over Claude, which costs money per note. Ollama was rejected because it would run on a laptop without a GPU, so reading screenshots would be slow and the laptop would have to stay on. Jev was rejected because it only reads text and cannot propose folders. The cost is that Google may use free-tier notes to improve its models. The app still starts and sorts with the rules when no `GEMINI_API_KEY` is set.
 
+Updated: 2026-10-01. `tzdata` was added because Windows has no timezone database of its own, and the app now reads times in each user's timezone with `zoneinfo`.
+
 ## [2]. Inbox and reminders are separate domains
 
 Date: 2026-09-25
@@ -23,6 +25,8 @@ Consequences: Assignment 2 can run reminders as its own service that stores item
 Updated: 2026-09-29. Folders are a third area in `noteezer/folders.py` that owns the folder tree: create, rename, move, delete, and the rule that a folder cannot move inside itself. Inbox stores which folder an item is in, but the only call it makes into folders is `require_folder(user_id, folder_id)` before it saves or moves an item. This is where automatic sorting will live, so it can later become its own service next to reminders.
 
 Updated: 2026-09-30. Sorting lives in `noteezer/sorting.py` with its own `sort_results` table. Inbox does not call sorting at all: a line waits to be sorted when it is in Unsorted and has no sort result yet. Sorting reads those lines and files them only through `file_unsorted_item`, which does nothing if the user already moved the line. The engine sits behind a `Sorter` interface picked by the `SORTER` variable, so a Gemini engine can be added without touching inbox. A background task inside the same process runs the sorting, which the single-process rule allows. A message queue was rejected because it needs a second process.
+
+Updated: 2026-10-01. Sorting can now change more than the folder, but only through guarded inbox functions that do nothing if the item changed meanwhile. `change_plain_note_kind` only turns a plain note into an idea or a task. `schedule_unset_reminder` only times a reminder that has no time yet. `split_item` creates the parts and hides the original. Inbox is still the only code that calls `schedule` in reminders.
 
 ## [3]. How inbox rows relate to reminder rows
 
@@ -38,6 +42,8 @@ Updated: 2026-09-28. A daily reminder stores `repeat_daily` and an optional `rep
 Updated: 2026-09-29. `folders` has `parent_id` pointing at another folder, so folders nest like Notion pages. A unique index on user, parent, and name (ignoring case) stops two sibling folders with the same name. The same name in different parents is allowed. `items.folder_id` is optional, and no folder means Unsorted. Deleting a folder deletes its subfolders (`ON DELETE CASCADE`), but items are never deleted with a folder: `ON DELETE SET NULL` moves them to Unsorted. The kind of an item (note, idea, task, link, reminder) stays separate from its folder, because a Game folder holds both tasks and ideas. Older databases are rebuilt once on startup because SQLite cannot change the kind CHECK in place. Rejected: storing a folder path as text on the item, because renaming or moving a folder would then need to rewrite every item.
 
 Updated: 2026-09-30. `sort_results` uses `item_id` as its primary key, like `reminders`, so an item has at most one sort result, and it is deleted with the item. It stores the status (filed, review, accepted, retry, failed), the suggested `folder_id`, the confidence, the engine name, and the retry count and time. If the suggested folder is deleted, `folder_id` becomes NULL and the suggestion disappears. `proposed_name` and `proposed_parent_id` hold a new folder the engine suggests. It is only created when the user taps Create folder. `link_previews` is also keyed by `item_id` and stores the title and description of a line's first link, so a link is fetched once and not again on every retry.
+
+Updated: 2026-10-01. `users.timezone` stores the browser's IANA zone, such as Europe/Madrid. `items.split_from` points a part at the line it was split from, with `ON DELETE SET NULL`, and `items.hidden` hides that original while its parts exist. Undo split deletes the parts and clears `hidden`. Deleting the original was rejected because a bad split could not be undone. `sort_results.suggested_remind_at` holds a time Gemini read from a line that is not a reminder, until the user accepts it. A reminder item may now exist without a `reminders` row while it waits for a time.
 
 ## [4]. Testing approach
 

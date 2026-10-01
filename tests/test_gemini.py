@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from noteezer.sorting import (
     FolderOption,
     NewFolder,
     Note,
+    Part,
     accept_proposal,
     requeue_unsorted,
     results_for,
@@ -28,8 +30,17 @@ MOVIES = FolderOption(3, "Movies", "Movies")
 FOLDERS = [PROJECTS, GAME, MOVIES]
 
 
-def _answer(folder_id=None, confidence=0.0, new_folder=None) -> str:
-    return json.dumps({"folder_id": folder_id, "confidence": confidence, "new_folder": new_folder})
+def _answer(folder_id=None, confidence=0.0, new_folder=None, kind="note", remind_at=None, parts=()) -> str:
+    return json.dumps(
+        {
+            "folder_id": folder_id,
+            "confidence": confidence,
+            "new_folder": new_folder,
+            "kind": kind,
+            "remind_at": remind_at,
+            "parts": list(parts),
+        }
+    )
 
 
 class FakeModel:
@@ -42,12 +53,16 @@ class FakeModel:
         return self.answers.pop(0)
 
 
-def test_a_clear_tag_is_sorted_without_calling_the_model() -> None:
-    model = FakeModel()
-    suggestion = GeminiSorter(model, min_interval=0).suggest(Note("fix hitbox #game", ("game",)), FOLDERS)
-    assert suggestion.folder_id == GAME.id
-    assert suggestion.engine == "rules"
-    assert model.prompts == []
+def test_a_clear_tag_decides_the_folder_but_the_model_still_reads_the_rest() -> None:
+    model = FakeModel(_answer(MOVIES.id, 0.6, kind="task", remind_at="2026-10-03T15:00"))
+    zone = ZoneInfo("Europe/Madrid")
+    note = Note("fix hitbox friday 3pm #game", ("game",), now=datetime(2026, 10, 1, 10, 0, tzinfo=zone))
+    suggestion = GeminiSorter(model, min_interval=0).suggest(note, FOLDERS)
+    assert (suggestion.folder_id, suggestion.confidence) == (GAME.id, 0.9)
+    assert suggestion.kind == "task"
+    assert suggestion.remind_at == datetime(2026, 10, 3, 13, 0, tzinfo=timezone.utc)
+    assert "Now: Thursday 2026-10-01 10:00 (Europe/Madrid)" in model.prompts[0]
+    assert "Saved as: note" in model.prompts[0]
 
 
 def test_the_model_sees_folder_ids_and_link_titles() -> None:
@@ -139,3 +154,22 @@ def test_env_picks_gemini_only_with_a_key(monkeypatch) -> None:
     assert sorter_from_env().name == "gemini"
     monkeypatch.setenv("SORTER", "rules")
     assert sorter_from_env().name == "rules"
+
+
+def test_parts_and_times_are_checked_before_they_are_trusted() -> None:
+    parts = [
+        {"text": "Cannon Circle: bigger cannon balls", "kind": "task", "folder_id": GAME.id, "confidence": 0.9},
+        {"text": "  ", "kind": "task", "folder_id": GAME.id, "confidence": 0.9},
+        {"text": "Noteezer: share target", "kind": "maybe", "folder_id": 99, "confidence": 3},
+    ]
+    answer = parse_answer(_answer(parts=parts, remind_at="next friday"), FOLDERS)
+    assert answer.parts == (
+        Part("Cannon Circle: bigger cannon balls", "task", GAME.id, 0.9),
+        Part("Noteezer: share target", None, None, 1.0),
+    )
+    assert answer.remind_at is None
+    assert answer.kind == "note"
+    assert parse_answer(_answer(parts=parts[:1]), FOLDERS).parts == ()
+    assert parse_answer(_answer(remind_at="2026-10-03T15:00"), FOLDERS).remind_at == datetime(
+        2026, 10, 3, 15, 0, tzinfo=timezone.utc
+    )

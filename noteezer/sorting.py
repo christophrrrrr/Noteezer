@@ -4,13 +4,22 @@ import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Protocol
 
 from noteezer.classify import classify
 from noteezer.folders import FolderError, create_folder, find_folder, list_folders
-from noteezer.inbox import file_unsorted_item, move_item
+from noteezer.inbox import (
+    change_plain_note_kind,
+    file_unsorted_item,
+    make_reminder,
+    move_item,
+    schedule_unset_reminder,
+    split_item,
+    undo_split,
+)
 from noteezer.links import LinkPreview, first_url, save_preview, stored_preview
+from noteezer.users import user_timezone
 
 FILE_AT = 0.8
 MAX_ATTEMPTS = 5
@@ -31,6 +40,8 @@ class Note:
     body: str
     tags: tuple[str, ...] = ()
     links: tuple[LinkPreview, ...] = ()
+    kind: str = "note"
+    now: datetime | None = None  # in the user's timezone, so "friday 3pm" can be read
 
 
 @dataclass(frozen=True)
@@ -40,11 +51,22 @@ class NewFolder:
 
 
 @dataclass(frozen=True)
+class Part:
+    text: str
+    kind: str | None
+    folder_id: int | None
+    confidence: float
+
+
+@dataclass(frozen=True)
 class Suggestion:
     folder_id: int | None
     confidence: float
     new_folder: NewFolder | None = None
     engine: str | None = None
+    kind: str | None = None
+    remind_at: datetime | None = None
+    parts: tuple[Part, ...] = ()
 
 
 class Sorter(Protocol):
@@ -103,23 +125,28 @@ def sort_pending(
     limit: int = 20,
     fetch_preview: Callable[[str], LinkPreview | None] | None = None,
 ) -> int:
-    # Pending means: still in Unsorted, never sorted (or due for a retry), and
-    # the owner has at least one folder to sort into. fetch_preview is passed
-    # by the worker; without it no link is fetched.
+    # Pending means never sorted (or due for a retry) and either still in
+    # Unsorted while the owner has a folder to sort into, or a reminder saved
+    # without a time, wherever it is. Split originals are hidden and skipped.
+    # fetch_preview is passed by the worker; without it no link is fetched.
     rows = connection.execute(
         """
-        SELECT i.id, i.user_id, i.body, r.attempts
+        SELECT i.id, i.user_id, i.body, i.kind, i.folder_id, i.split_from, r.attempts
         FROM items i
         LEFT JOIN sort_results r ON r.item_id = i.id
-        WHERE i.folder_id IS NULL
+        WHERE i.hidden = 0
           AND (r.item_id IS NULL OR (r.status = 'retry' AND r.retry_at <= ?))
-          AND EXISTS (SELECT 1 FROM folders f WHERE f.user_id = i.user_id)
+          AND (
+            (i.folder_id IS NULL AND EXISTS (SELECT 1 FROM folders f WHERE f.user_id = i.user_id))
+            OR (i.kind = 'reminder' AND NOT EXISTS (SELECT 1 FROM reminders m WHERE m.item_id = i.id))
+          )
         ORDER BY i.id
         LIMIT ?
         """,
         (_iso(now), limit),
     ).fetchall()
     options_by_user: dict[int, list[FolderOption]] = {}
+    zones: dict[int, tzinfo] = {}
     for row in rows:
         user_id = int(row["user_id"])
         if user_id not in options_by_user:
@@ -127,6 +154,7 @@ def sort_pending(
                 FolderOption(entry["id"], entry["name"], entry["path"])
                 for entry in list_folders(connection, user_id)
             ]
+            zones[user_id] = user_timezone(connection, user_id)
         options = options_by_user[user_id]
         item_id = int(row["id"])
         attempts = int(row["attempts"] or 0) + 1
@@ -134,6 +162,8 @@ def sort_pending(
             body=row["body"],
             tags=classify(row["body"]).tags,
             links=_links(connection, item_id, row["body"], fetch_preview, now),
+            kind=row["kind"],
+            now=now.astimezone(zones[user_id]),
         )
         try:
             suggestion = sorter.suggest(note, options)
@@ -141,7 +171,7 @@ def sort_pending(
             log.warning("Sorting item %s with %s failed: %s", item_id, sorter.name, error)
             _record_failure(connection, item_id, sorter.name, attempts, str(error), now)
             continue
-        _apply(connection, user_id, item_id, suggestion, options, sorter.name, attempts, now)
+        _apply(connection, user_id, row, suggestion, options, sorter.name, attempts, now)
     return len(rows)
 
 
@@ -192,6 +222,52 @@ def accept_proposal(connection: sqlite3.Connection, user_id: int, item_id: int, 
     return folder_id
 
 
+def accept_reminder(connection: sqlite3.Connection, user_id: int, item_id: int, now: datetime) -> datetime:
+    row = connection.execute(
+        """
+        SELECT r.suggested_remind_at
+        FROM sort_results r
+        JOIN items i ON i.id = r.item_id
+        WHERE r.item_id = ? AND i.user_id = ? AND r.suggested_remind_at IS NOT NULL
+        """,
+        (item_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("no reminder time to accept")
+    remind_at = datetime.fromisoformat(row["suggested_remind_at"])
+    make_reminder(connection, user_id, item_id, remind_at, now)
+    connection.execute("UPDATE sort_results SET suggested_remind_at = NULL WHERE item_id = ?", (item_id,))
+    connection.commit()
+    return remind_at
+
+
+def undo_auto_split(connection: sqlite3.Connection, user_id: int, item_id: int) -> int:
+    # The original comes back as one line and is marked as decided, so a new
+    # folder does not send it to the sorter again and split it a second time.
+    original = undo_split(connection, user_id, item_id)
+    connection.execute("UPDATE sort_results SET status = 'accepted' WHERE item_id = ?", (original,))
+    connection.commit()
+    return original
+
+
+def resort_if_waiting(connection: sqlite3.Connection, user_id: int, item_id: int) -> bool:
+    # After an edit turns a line into a reminder without a time, its old sort
+    # result is dropped so the sorter reads the new text for a time.
+    cursor = connection.execute(
+        """
+        DELETE FROM sort_results
+        WHERE item_id IN (
+            SELECT i.id FROM items i
+            WHERE i.id = ? AND i.user_id = ? AND i.kind = 'reminder'
+              AND NOT EXISTS (SELECT 1 FROM reminders m WHERE m.item_id = i.id)
+        )
+        """,
+        (item_id, user_id),
+    )
+    connection.commit()
+    return cursor.rowcount == 1
+
+
 def requeue_unsorted(connection: sqlite3.Connection, user_id: int, only_unmatched: bool = False) -> int:
     # only_unmatched is used when a folder is created or renamed: lines that
     # matched nothing may match the new name. Lines that already have a
@@ -211,7 +287,7 @@ def results_for(connection: sqlite3.Connection, user_id: int) -> dict[int, dict]
     rows = connection.execute(
         """
         SELECT r.item_id, r.status, r.folder_id, r.confidence, r.engine,
-               r.proposed_name, r.proposed_parent_id
+               r.proposed_name, r.proposed_parent_id, r.suggested_remind_at
         FROM sort_results r
         JOIN items i ON i.id = r.item_id
         WHERE i.user_id = ?
@@ -226,6 +302,7 @@ def results_for(connection: sqlite3.Connection, user_id: int) -> dict[int, dict]
             "engine": row["engine"],
             "proposed_name": row["proposed_name"],
             "proposed_parent_id": row["proposed_parent_id"],
+            "suggested_remind_at": row["suggested_remind_at"],
         }
         for row in rows
     }
@@ -255,17 +332,27 @@ def _links(
 def _apply(
     connection: sqlite3.Connection,
     user_id: int,
-    item_id: int,
+    row: sqlite3.Row,
     suggestion: Suggestion,
     options: list[FolderOption],
     engine: str,
     attempts: int,
     now: datetime,
 ) -> None:
-    # An engine may only point at one of the user's own folders.
+    item_id = int(row["id"])
+    engine = suggestion.engine or engine
     known = {option.id for option in options}
-    folder_id = suggestion.folder_id if suggestion.folder_id in known else None
-    proposal = suggestion.new_folder if folder_id is None else None
+    unsorted = row["folder_id"] is None
+
+    parts = [part for part in suggestion.parts if part.text.strip()]
+    if unsorted and row["split_from"] is None and len(parts) >= 2:
+        _split(connection, user_id, item_id, parts, known, engine, attempts, now)
+        return
+
+    # An engine may only point at one of the user's own folders, and only an
+    # item that is still in Unsorted is filed.
+    folder_id = suggestion.folder_id if unsorted and suggestion.folder_id in known else None
+    proposal = suggestion.new_folder if unsorted and folder_id is None else None
     if proposal is not None and proposal.parent_id not in known:
         proposal = NewFolder(proposal.name, None)
     status = "review"
@@ -275,19 +362,57 @@ def _apply(
                 status = "filed"
         except LookupError:
             folder_id = None
+
+    if suggestion.kind in ("idea", "task"):
+        change_plain_note_kind(connection, user_id, item_id, suggestion.kind)
+
+    # A "remind ..." line saved without a time gets the time straight away.
+    # Any other line with a time only gets a suggestion to accept.
+    suggested_at = None
+    if suggestion.remind_at is not None and suggestion.remind_at > now:
+        if not schedule_unset_reminder(connection, user_id, item_id, suggestion.remind_at, now):
+            if row["kind"] != "reminder":
+                suggested_at = _iso(suggestion.remind_at)
+
     _record(
         connection,
         item_id,
         status,
         folder_id,
         suggestion.confidence,
-        suggestion.engine or engine,
+        engine,
         attempts,
         None,
         None,
         now,
         proposal,
+        suggested_at,
     )
+
+
+def _split(
+    connection: sqlite3.Connection,
+    user_id: int,
+    item_id: int,
+    parts: list[Part],
+    known: set[int],
+    engine: str,
+    attempts: int,
+    now: datetime,
+) -> None:
+    # Each part with a confident folder is filed at once. A part with a
+    # weaker guess gets it as a suggestion. A part with no folder gets no
+    # result, so the worker sorts it on its own next.
+    part_ids = split_item(connection, user_id, item_id, [(part.text, part.kind) for part in parts], now)
+    for part_id, part in zip(part_ids, parts):
+        folder_id = part.folder_id if part.folder_id in known else None
+        if folder_id is None:
+            continue
+        status = "review"
+        if part.confidence >= FILE_AT and file_unsorted_item(connection, user_id, part_id, folder_id):
+            status = "filed"
+        _record(connection, part_id, status, folder_id, part.confidence, engine, 1, None, None, now)
+    _record(connection, item_id, "review", None, None, engine, attempts, None, None, now)
 
 
 def _record_failure(
@@ -317,6 +442,7 @@ def _record(
     error: str | None,
     now: datetime,
     proposal: NewFolder | None = None,
+    suggested_remind_at: str | None = None,
 ) -> None:
     # Only a row waiting for a retry may be overwritten, so two runs that
     # picked up the same item cannot replace each other's result.
@@ -324,8 +450,8 @@ def _record(
         """
         INSERT INTO sort_results
             (item_id, status, folder_id, confidence, engine, attempts, retry_at, error, sorted_at,
-             proposed_name, proposed_parent_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             proposed_name, proposed_parent_id, suggested_remind_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(item_id) DO UPDATE SET
             status = excluded.status,
             folder_id = excluded.folder_id,
@@ -336,7 +462,8 @@ def _record(
             error = excluded.error,
             sorted_at = excluded.sorted_at,
             proposed_name = excluded.proposed_name,
-            proposed_parent_id = excluded.proposed_parent_id
+            proposed_parent_id = excluded.proposed_parent_id,
+            suggested_remind_at = excluded.suggested_remind_at
         WHERE sort_results.status = 'retry'
         """,
         (
@@ -351,6 +478,7 @@ def _record(
             _iso(now),
             proposal.name if proposal else None,
             proposal.parent_id if proposal else None,
+            suggested_remind_at,
         ),
     )
     connection.commit()

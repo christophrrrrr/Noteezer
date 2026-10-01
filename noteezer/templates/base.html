@@ -48,5 +48,20 @@
   <main>
     {% block body %}{% endblock %}
   </main>
+  <script>
+    // Every form also sends the browser's timezone, so "friday 3pm" and the
+    // date picker are read in the user's time, not the server's.
+    (function () {
+      var zone = "";
+      try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (error) {}
+      document.querySelectorAll("form[method=post]").forEach(function (form) {
+        var input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "tz";
+        input.value = zone;
+        form.appendChild(input);
+      });
+    })();
+  </script>
 </body>
 </html>

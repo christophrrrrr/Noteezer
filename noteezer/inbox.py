@@ -1,7 +1,7 @@
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, tzinfo
 
-from noteezer.classify import ClassificationError, classify
+from noteezer.classify import URL_PATTERN, ClassificationError, classify
 from noteezer.folders import require_folder
 from noteezer.reminders import refresh, schedule
 
@@ -120,9 +120,112 @@ def file_unsorted_item(
     return cursor.rowcount == 1
 
 
+def change_plain_note_kind(connection: sqlite3.Connection, user_id: int, item_id: int, kind: str) -> bool:
+    # Used by automatic sorting. Only a plain note becomes an idea or a task;
+    # links, reminders, and lines that already have a kind are left alone.
+    if kind not in ("idea", "task"):
+        raise ValueError("a note can only become an idea or a task")
+    cursor = connection.execute(
+        "UPDATE items SET kind = ? WHERE id = ? AND user_id = ? AND kind = 'note'",
+        (kind, item_id, user_id),
+    )
+    connection.commit()
+    return cursor.rowcount == 1
+
+
+def schedule_unset_reminder(
+    connection: sqlite3.Connection,
+    user_id: int,
+    item_id: int,
+    remind_at: datetime,
+    now: datetime,
+) -> bool:
+    # Used by automatic sorting for "remind ..." lines saved without a time.
+    # A reminder that already has a time is never moved.
+    row = connection.execute(
+        """
+        SELECT i.id FROM items i
+        LEFT JOIN reminders r ON r.item_id = i.id
+        WHERE i.id = ? AND i.user_id = ? AND i.kind = 'reminder' AND r.item_id IS NULL
+        """,
+        (item_id, user_id),
+    ).fetchone()
+    if row is None:
+        return False
+    schedule(connection, item_id, remind_at, now)
+    connection.commit()
+    return True
+
+
+def make_reminder(
+    connection: sqlite3.Connection,
+    user_id: int,
+    item_id: int,
+    remind_at: datetime,
+    now: datetime,
+) -> None:
+    row = connection.execute(
+        "SELECT body FROM items WHERE id = ? AND user_id = ?",
+        (item_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("item not found")
+    update_item(connection, user_id, item_id, row["body"], remind_at, now, forced_kind="reminder")
+
+
+def split_item(
+    connection: sqlite3.Connection,
+    user_id: int,
+    item_id: int,
+    parts: list[tuple[str, str | None]],
+    now: datetime,
+) -> list[int]:
+    """Turns one saved line into several. The original is hidden, not deleted.
+
+    Each part is (text, kind). Every part points back with split_from, so
+    undo_split can delete the parts and show the original again.
+    """
+    row = connection.execute(
+        "SELECT folder_id, split_from, hidden FROM items WHERE id = ? AND user_id = ?",
+        (item_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("item not found")
+    if row["split_from"] is not None or row["hidden"]:
+        raise ValueError("this line is already part of a split")
+    cleaned = [(body.strip(), kind) for body, kind in parts if body.strip()]
+    if len(cleaned) < 2:
+        raise ValueError("a split needs at least two parts")
+    created = []
+    for body, kind in cleaned:
+        forced = kind if kind in ("note", "idea", "task") and not URL_PATTERN.search(body) else None
+        part_id = save_item(connection, user_id, body, None, now, forced_kind=forced, folder_id=row["folder_id"])
+        connection.execute("UPDATE items SET split_from = ? WHERE id = ?", (item_id, part_id))
+        created.append(part_id)
+    connection.execute("UPDATE items SET hidden = 1 WHERE id = ?", (item_id,))
+    connection.commit()
+    return created
+
+
+def undo_split(connection: sqlite3.Connection, user_id: int, item_id: int) -> int:
+    row = connection.execute(
+        "SELECT id, split_from, hidden FROM items WHERE id = ? AND user_id = ?",
+        (item_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("item not found")
+    original = row["split_from"] if row["split_from"] is not None else (row["id"] if row["hidden"] else None)
+    if original is None:
+        raise LookupError("this line was not split")
+    connection.execute("DELETE FROM items WHERE split_from = ? AND user_id = ?", (original, user_id))
+    connection.execute("UPDATE items SET hidden = 0 WHERE id = ? AND user_id = ?", (original, user_id))
+    connection.commit()
+    return int(original)
+
+
 def count_by_folder(connection: sqlite3.Connection, user_id: int) -> dict[int | None, int]:
     rows = connection.execute(
-        "SELECT folder_id, COUNT(*) AS total FROM items WHERE user_id = ? GROUP BY folder_id",
+        "SELECT folder_id, COUNT(*) AS total FROM items WHERE user_id = ? AND hidden = 0 GROUP BY folder_id",
         (user_id,),
     ).fetchall()
     return {row["folder_id"]: int(row["total"]) for row in rows}
@@ -151,15 +254,16 @@ def list_items(
     now: datetime | None = None,
     folder_id: int | None = None,
     unsorted: bool = False,
+    zone: tzinfo | None = None,
 ) -> list[dict]:
     if now is not None:
         refresh(connection, user_id, now)
     sql = """
-        SELECT i.id, i.folder_id, i.body, i.kind, i.task_done, i.created_at,
+        SELECT i.id, i.folder_id, i.body, i.kind, i.task_done, i.created_at, i.split_from,
                r.remind_at, r.status, r.repeat_daily, r.repeat_until
         FROM items i
         LEFT JOIN reminders r ON r.item_id = i.id
-        WHERE i.user_id = ?
+        WHERE i.user_id = ? AND i.hidden = 0
     """
     parameters: list[object] = [user_id]
     if unsorted:
@@ -197,7 +301,9 @@ def list_items(
             "task_done": bool(row["task_done"]),
             "created_at": row["created_at"],
             "remind_at": row["remind_at"],
-            "remind_local": _local_input(row["remind_at"]),
+            "remind_local": _local_input(row["remind_at"], zone),
+            "remind_label": _label(row["remind_at"], zone),
+            "split_from": row["split_from"],
             "status": row["status"],
             "repeat_daily": bool(row["repeat_daily"]),
             "repeat_until": row["repeat_until"],
@@ -213,10 +319,12 @@ def _check_reminder(
     repeat_daily: bool,
     repeat_until: date | None,
 ) -> None:
-    if kind == "reminder" and remind_at is None:
-        raise ClassificationError("Pick a date and time for a reminder.")
+    # A reminder may be saved without a time: automatic sorting can read one
+    # from the text, and until then the page asks for it.
     if kind != "reminder":
         return
+    if repeat_daily and remind_at is None:
+        raise ClassificationError("Pick a start time for a daily reminder.")
     if repeat_until is not None and not repeat_daily:
         raise ClassificationError("An end date is only for a daily reminder.")
     if (
@@ -262,13 +370,23 @@ def _attach_tags(
         )
 
 
-def _local_input(value: str | None) -> str:
+def _local_input(value: str | None, zone: tzinfo | None) -> str:
+    local = _local(value, zone)
+    return local.strftime("%Y-%m-%dT%H:%M") if local else ""
+
+
+def _label(value: str | None, zone: tzinfo | None) -> str:
+    local = _local(value, zone)
+    return f"{local:%a} {local.day} {local:%b}, {local:%H:%M}" if local else ""
+
+
+def _local(value: str | None, zone: tzinfo | None) -> datetime | None:
     if not value:
-        return ""
+        return None
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone().strftime("%Y-%m-%dT%H:%M")
+    return parsed.astimezone(zone or timezone.utc)
 
 
 def _like(query: str) -> str:
