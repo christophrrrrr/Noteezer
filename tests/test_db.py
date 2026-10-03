@@ -13,11 +13,22 @@ def _tables(connection: sqlite3.Connection) -> set[str]:
     return {row["name"] for row in rows}
 
 
-def test_init_creates_the_nine_tables(tmp_path: Path) -> None:
+def test_init_creates_every_table(tmp_path: Path) -> None:
     connection = connect(tmp_path / "noteezer.db")
     init_db(connection)
     assert _tables(connection) == {
-        "users", "folders", "items", "tags", "item_tags", "reminders", "sort_results", "link_previews", "images"
+        "users",
+        "folders",
+        "items",
+        "item_folders",
+        "folder_suggestions",
+        "folder_checks",
+        "tags",
+        "item_tags",
+        "reminders",
+        "sort_results",
+        "link_previews",
+        "images",
     }
     connection.close()
 
@@ -166,9 +177,11 @@ def test_old_database_gets_folders_and_keeps_its_rows(tmp_path: Path) -> None:
     init_db(connection)
 
     columns = {row["name"] for row in connection.execute("PRAGMA table_info(items)")}
-    assert "folder_id" in columns
-    items = connection.execute("SELECT id, kind, task_done, folder_id FROM items ORDER BY id").fetchall()
-    assert [tuple(row) for row in items] == [(1, "reminder", 0, None), (2, "task", 1, None)]
+    assert "folder_id" not in columns
+    assert {"split_from", "hidden"} <= columns
+    items = connection.execute("SELECT id, kind, task_done, hidden FROM items ORDER BY id").fetchall()
+    assert [tuple(row) for row in items] == [(1, "reminder", 0, 0), (2, "task", 1, 0)]
+    assert connection.execute("SELECT COUNT(*) AS n FROM item_folders").fetchone()["n"] == 0
     assert connection.execute("SELECT COUNT(*) AS n FROM reminders").fetchone()["n"] == 1
     assert connection.execute("SELECT COUNT(*) AS n FROM item_tags").fetchone()["n"] == 1
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -181,4 +194,44 @@ def test_old_database_gets_folders_and_keeps_its_rows(tmp_path: Path) -> None:
     )
     connection.execute("DELETE FROM items WHERE id = 1")
     assert connection.execute("SELECT COUNT(*) AS n FROM reminders").fetchone()["n"] == 0
+    connection.close()
+
+
+ONE_FOLDER_ITEMS = """
+CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE folders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+    parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE, name TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE items (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+    folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
+    body TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('note', 'idea', 'task', 'link', 'reminder')),
+    task_done INTEGER NOT NULL DEFAULT 0 CHECK (task_done IN (0, 1)),
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    split_from INTEGER REFERENCES items(id) ON DELETE SET NULL,
+    hidden INTEGER NOT NULL DEFAULT 0,
+    CHECK (kind = 'task' OR task_done = 0));
+CREATE INDEX idx_items_folder ON items (user_id, folder_id);
+INSERT INTO users VALUES (1, 'a@example.com', 'hash', '2026-09-26T00:00:00Z');
+INSERT INTO folders VALUES (1, 1, NULL, 'Table Tennis', '2026-10-01T00:00:00Z');
+INSERT INTO items VALUES (1, 1, 1, 'https://youtu.be/serve', 'link', 0, '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z', NULL, 0);
+INSERT INTO items VALUES (2, 1, NULL, 'loose thought', 'note', 0, '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z', NULL, 0);
+"""
+
+
+def test_a_one_folder_database_moves_each_folder_into_item_folders(tmp_path: Path) -> None:
+    connection = connect(tmp_path / "noteezer.db")
+    connection.executescript(ONE_FOLDER_ITEMS)
+    init_db(connection)
+    init_db(connection)
+
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(items)")}
+    assert "folder_id" not in columns
+    memberships = connection.execute("SELECT item_id, folder_id FROM item_folders").fetchall()
+    assert [tuple(row) for row in memberships] == [(1, 1)]
+    assert [row["body"] for row in connection.execute("SELECT body FROM items ORDER BY id")] == [
+        "https://youtu.be/serve",
+        "loose thought",
+    ]
+    assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     connection.close()

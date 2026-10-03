@@ -18,9 +18,10 @@ from noteezer.folders import (
 )
 from noteezer.inbox import (
     count_by_folder,
+    count_items,
     delete_item,
     list_items,
-    move_item,
+    set_folders,
     save_item,
     item_kind,
     toggle_task,
@@ -31,9 +32,13 @@ from noteezer.sessions import COOKIE_NAME, read_user_id, sign_user_id
 from noteezer.images import MAX_BYTES, PLACEHOLDER, ImageError, attach_image, check_image, image_for, images_for
 from noteezer.links import previews_for
 from noteezer.sorting import (
+    accept_also,
     accept_proposal,
     accept_reminder,
     accept_suggestion,
+    also_suggestions_for,
+    dismiss_also,
+    request_folder_check,
     requeue_unsorted,
     resort_if_waiting,
     results_for,
@@ -254,21 +259,53 @@ def register_routes(app: FastAPI) -> None:
         _wake_sorter(request)
         return _inbox_redirect(q, folder)
 
-    @app.post("/items/{item_id}/move")
-    def move_item_route(
+    @app.post("/items/{item_id}/folders")
+    def item_folders(
         request: Request,
         item_id: int,
-        target: str = Form(""),
+        folders: list[str] = Form([]),
         q: str = Form(""),
         folder: str = Form(""),
+    ):
+        # The "Folders" checklist in a line's menu: the line ends up in exactly
+        # the ticked folders, or in Unsorted when none is ticked.
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            set_folders(connection, user_id, item_id, [int(value) for value in folders if value.strip()])
+        except (LookupError, ValueError):
+            pass
+        finally:
+            connection.close()
+        return _inbox_redirect(q, folder)
+
+    @app.post("/items/{item_id}/also/{folder_id}")
+    def add_suggested_folder(request: Request, item_id: int, folder_id: int, q: str = Form(""), folder: str = Form("")):
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        connection = connect()
+        try:
+            accept_also(connection, user_id, item_id, folder_id)
+        except LookupError:
+            pass
+        finally:
+            connection.close()
+        return _inbox_redirect(q, folder)
+
+    @app.post("/items/{item_id}/also/{folder_id}/dismiss")
+    def dismiss_suggested_folder(
+        request: Request, item_id: int, folder_id: int, q: str = Form(""), folder: str = Form("")
     ):
         user_id = _current_user(request)
         if user_id is None:
             return RedirectResponse("/login", status_code=303)
         connection = connect()
         try:
-            move_item(connection, user_id, item_id, _folder_id(target))
-        except (LookupError, ValueError):
+            dismiss_also(connection, user_id, item_id, folder_id)
+        except LookupError:
             pass
         finally:
             connection.close()
@@ -407,6 +444,7 @@ def register_routes(app: FastAPI) -> None:
         try:
             created = create_folder(connection, user_id, name, _now(), parent_id=_folder_id(parent))
             requeue_unsorted(connection, user_id, only_unmatched=True)
+            request_folder_check(connection, created, _now())
         except (FolderError, LookupError, ValueError) as error:
             return _render_inbox(request, user_id, "", folder, None, _message(error), status_code=400)
         finally:
@@ -481,6 +519,8 @@ def _render_inbox(
     try:
         folders = list_folders(connection, user_id)
         counts = count_by_folder(connection, user_id)
+        total = count_items(connection, user_id)
+        also = also_suggestions_for(connection, user_id)
         current = next((entry for entry in folders if entry["id"] == folder_id), None)
         if folder_id is not None and current is None:
             folder_id = None
@@ -497,7 +537,8 @@ def _render_inbox(
         entry["count"] = counts.get(entry["id"], 0)
     names = {entry["id"]: entry["path"] for entry in folders}
     for item in items:
-        item["folder_path"] = names.get(item["folder_id"], "")
+        item["folders"] = [{"id": folder_id, "path": names.get(folder_id, "")} for folder_id in item["folder_ids"]]
+        item["also"] = [{"id": folder_id, "path": names[folder_id]} for folder_id in also.get(item["id"], []) if folder_id in names]
         item["preview"] = previews.get(item["id"])
         item["image"] = pictures.get(item["id"])
         item["sort"] = results.get(item["id"])
@@ -539,8 +580,7 @@ def _render_inbox(
             "due": due,
             "timeline": timeline,
             "crumbs": crumbs,
-            "pending": any(item["sort"] is None and (not item["folder_id"] or item["kind"] == "reminder") for item in items)
-            and bool(folders),
+
             "folders": folders,
             "current": current,
             "subfolders": [entry for entry in folders if current and entry["parent_id"] == current["id"]],
@@ -548,7 +588,7 @@ def _render_inbox(
             "folder": view_key,
             "unsorted_count": counts.get(None, 0),
             "has_folders": bool(folders),
-            "total_count": sum(counts.values()),
+            "total_count": total,
             "draft": draft or _draft("", "", "", False, ""),
             "query": query,
             "error": error,

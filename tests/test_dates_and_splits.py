@@ -73,7 +73,7 @@ def test_a_remind_line_without_a_time_gets_one_from_the_text(tmp_path: Path) -> 
     assert listed[unsorted]["status"] == "scheduled"
     assert listed[unsorted]["remind_label"] == "Sat 3 Oct, 15:00"
     assert listed[filed]["status"] == "scheduled"
-    assert listed[filed]["folder_id"] == game
+    assert listed[filed]["folder_ids"] == [game]
     assert sort_pending(connection, engine, NOW) == 0
     connection.close()
 
@@ -132,9 +132,9 @@ def test_a_list_is_split_into_parts_that_are_sorted_on_their_own(tmp_path: Path)
 
     listed = {item["body"]: item for item in list_items(connection, owner)}
     assert original not in {item["id"] for item in listed.values()}
-    assert listed["Cannon Circle: bigger balls"]["folder_id"] == game
+    assert listed["Cannon Circle: bigger balls"]["folder_ids"] == [game]
     assert listed["Cannon Circle: bigger balls"]["kind"] == "idea"
-    assert listed["Cannon Circle: fix hitbox"]["folder_id"] is None
+    assert listed["Cannon Circle: fix hitbox"]["folder_ids"] == []
     assert listed["Cannon Circle: fix hitbox"]["kind"] == "task"
     results = results_for(connection, owner)
     assert results[listed["Cannon Circle: fix hitbox"]["id"]]["folder_id"] == game

@@ -7,7 +7,7 @@ from datetime import datetime, timezone, tzinfo
 
 from noteezer.images import Image
 from noteezer.links import TLS_CONTEXT
-from noteezer.sorting import FILE_AT, FolderOption, NewFolder, Note, Part, RulesSorter, Suggestion
+from noteezer.sorting import FILE_AT, Candidate, FolderOption, NewFolder, Note, Part, RulesSorter, Suggestion
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 # Flash-Lite missed dates in screenshots about half the time in testing;
@@ -24,6 +24,9 @@ Answer with:
 - folder_id: the id of the single best folder, or null when none fits.
 - confidence: from 0 to 1, how sure you are that folder_id is right. Use 0.8 or more only when
   the note clearly belongs there. Use less when two folders could fit or you are guessing.
+- also_folder_ids: other folders the note clearly belongs in as well, because a note can be in
+  several folders. For example, a table tennis video belongs in "Table Tennis" and also in
+  "Cool videos". Only folders you are as sure about as folder_id. Otherwise an empty list.
 - new_folder: only when folder_id is null and the note starts a clear topic the folders do not
   cover. Give a short name (1 to 3 words, Title Case, in the language of the existing folder
   names) and parent_id, the id of the folder it belongs inside, or null for the top level.
@@ -60,6 +63,7 @@ RESPONSE_SCHEMA = {
     "properties": {
         "folder_id": {"type": ["integer", "null"]},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "also_folder_ids": {"type": "array", "items": {"type": "integer"}},
         "new_folder": {
             "type": ["object", "null"],
             "properties": {
@@ -89,6 +93,7 @@ RESPONSE_SCHEMA = {
     "required": [
         "folder_id",
         "confidence",
+        "also_folder_ids",
         "new_folder",
         "kind",
         "remind_at",
@@ -100,7 +105,19 @@ RESPONSE_SCHEMA = {
 
 KINDS = ("note", "idea", "task")
 
-Generate = Callable[[str, str, Image | None], str]
+MATCH_SYSTEM = """The user just created a new folder. You get its path and a list of the user's
+notes as `id: text`. The notes are already filed in other folders, and a note can be in several
+folders. Return the ids of the notes that clearly belong in the new folder too, for example a video
+note for a folder called "Cool videos". Leave out anything you are unsure about. The notes may be
+English, Spanish, or both."""
+
+MATCH_SCHEMA = {
+    "type": "object",
+    "properties": {"item_ids": {"type": "array", "items": {"type": "integer"}}},
+    "required": ["item_ids"],
+}
+
+Generate = Callable[..., str]  # generate(system, prompt, image, schema=...) -> JSON text
 
 
 class GeminiSorter:
@@ -140,8 +157,28 @@ class GeminiSorter:
         zone = note.now.tzinfo if note.now is not None else None
         answer = parse_answer(self._generate(SYSTEM, build_prompt(note, folders), note.image), folders, zone)
         if rules.confidence >= FILE_AT:
-            answer = replace(answer, folder_id=rules.folder_id, confidence=rules.confidence, new_folder=None)
+            # The tag decides the main folder. A folder Gemini is sure about
+            # still gets the line too, because a line can be in several.
+            own_pick = (answer.folder_id,) if answer.folder_id and answer.confidence >= FILE_AT else ()
+            also = tuple(dict.fromkeys(rules.also + own_pick + answer.also))
+            answer = replace(
+                answer,
+                folder_id=rules.folder_id,
+                confidence=rules.confidence,
+                new_folder=None,
+                also=tuple(folder for folder in also if folder != rules.folder_id),
+            )
         return answer
+
+    def match_folder(self, folder: FolderOption, candidates: list[Candidate]) -> list[int]:
+        self._wait_turn()
+        prompt = "\n".join(
+            [f"New folder: {folder.path}", "", "Notes:", *(f"{note.id}: {note.text}" for note in candidates)]
+        )
+        data = json.loads(self._generate(MATCH_SYSTEM, prompt, None, schema=MATCH_SCHEMA))
+        ids = data.get("item_ids") if isinstance(data, dict) else None
+        known = {note.id for note in candidates}
+        return [item_id for item_id in ids or [] if isinstance(item_id, int) and item_id in known]
 
     def _wait_turn(self) -> None:
         if self._last_call is not None:
@@ -187,10 +224,16 @@ def parse_answer(raw: str, folders: list[FolderOption], zone: tzinfo | None = No
                 folder_id = existing.id
             else:
                 proposal = NewFolder(name, parent_id)
+    also_ids: list[int] = []
+    if folder_id is not None and isinstance(data.get("also_folder_ids"), list):
+        for folder in data["also_folder_ids"]:
+            if isinstance(folder, int) and folder in known and folder != folder_id and folder not in also_ids:
+                also_ids.append(folder)
     return Suggestion(
         folder_id,
         confidence,
         proposal,
+        also=tuple(also_ids[:3]),
         engine="gemini",
         kind=data.get("kind") if data.get("kind") in KINDS else None,
         remind_at=_local_time(data.get("remind_at"), zone),
@@ -259,7 +302,7 @@ def _client_call(model: str, image_model: str, api_key: str) -> Generate:
         http_options=types.HttpOptions(timeout=TIMEOUT_MS, client_args={"verify": TLS_CONTEXT}),
     )
 
-    def generate(system: str, prompt: str, image: Image | None) -> str:
+    def generate(system: str, prompt: str, image: Image | None, schema: dict = RESPONSE_SCHEMA) -> str:
         contents: list = [prompt]
         if image is not None:
             contents.append(types.Part.from_bytes(data=image.data, mime_type=image.mime))
@@ -269,7 +312,7 @@ def _client_call(model: str, image_model: str, api_key: str) -> Generate:
             config=types.GenerateContentConfig(
                 system_instruction=system,
                 response_mime_type="application/json",
-                response_json_schema=RESPONSE_SCHEMA,
+                response_json_schema=schema,
                 temperature=0,
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             ),

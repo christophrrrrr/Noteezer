@@ -49,7 +49,7 @@ class FakeModel:
         self.prompts: list[str] = []
         self.images: list = []
 
-    def __call__(self, system: str, prompt: str, image=None) -> str:
+    def __call__(self, system: str, prompt: str, image=None, schema=None) -> str:
         self.prompts.append(prompt)
         self.images.append(image)
         return self.answers.pop(0)

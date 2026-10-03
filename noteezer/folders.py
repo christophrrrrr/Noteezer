@@ -68,7 +68,8 @@ def move_folder(
 
 def delete_folder(connection: sqlite3.Connection, user_id: int, folder_id: int) -> None:
     # Subfolders go with it (ON DELETE CASCADE). Items are never deleted with a
-    # folder: items.folder_id is ON DELETE SET NULL, so they land in Unsorted.
+    # folder: only their item_folders rows go, so a line that was in no other
+    # folder lands in Unsorted.
     cursor = connection.execute(
         "DELETE FROM folders WHERE id = ? AND user_id = ?",
         (folder_id, user_id),
