@@ -231,6 +231,22 @@ def count_by_folder(connection: sqlite3.Connection, user_id: int) -> dict[int | 
     return {row["folder_id"]: int(row["total"]) for row in rows}
 
 
+def item_kind(connection: sqlite3.Connection, user_id: int, item_id: int) -> str:
+    return _owned_item(connection, user_id, item_id)["kind"]
+
+
+def toggle_task(connection: sqlite3.Connection, user_id: int, item_id: int) -> bool:
+    row = connection.execute(
+        "SELECT kind, task_done FROM items WHERE id = ? AND user_id = ?",
+        (item_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("item not found")
+    done = not bool(row["task_done"])
+    set_task_done(connection, user_id, item_id, done)
+    return done
+
+
 def set_task_done(
     connection: sqlite3.Connection,
     user_id: int,

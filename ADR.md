@@ -30,6 +30,8 @@ Updated: 2026-09-30. Sorting lives in `noteezer/sorting.py` with its own `sort_r
 
 Updated: 2026-10-01. Sorting can now change more than the folder, but only through guarded inbox functions that do nothing if the item changed meanwhile. `change_plain_note_kind` only turns a plain note into an idea or a task. `schedule_unset_reminder` only times a reminder that has no time yet. `split_item` creates the parts and hides the original. Inbox is still the only code that calls `schedule` in reminders.
 
+Updated: 2026-10-03. The route that marks a line done read the `items` table itself, which crossed the seam. It now asks inbox with `item_kind` and `toggle_task`, and calls `complete` in reminders for a reminder. No route runs SQL anymore, so each table is read only by the module that owns it.
+
 ## [3]. How inbox rows relate to reminder rows
 
 Date: 2026-09-26

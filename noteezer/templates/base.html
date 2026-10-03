@@ -2,68 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#191919">
+  <meta name="color-scheme" content="dark">
   <title>{{ title }} · Noteezer</title>
-  <style>
-    body { margin: 0; font-family: sans-serif; background: #f6f4ef; color: #1c1c1c; }
-    main { max-width: 32rem; margin: 0 auto; padding: 1.25rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 1rem; }
-    form, .card { display: flex; flex-direction: column; gap: 0.75rem; }
-    input, textarea, select, button { font: inherit; }
-    input, textarea, select { padding: 0.8rem; border: 1px solid #c8c2b4; border-radius: 0.6rem; background: white; }
-    textarea { min-height: 6rem; }
-    button, .link-button { padding: 0.85rem 1rem; border: 0; border-radius: 0.6rem; background: #1c1c1c; color: white; text-align: center; text-decoration: none; }
-    .error { background: #fde8e4; padding: 0.75rem; border-radius: 0.6rem; }
-    .item { background: white; border-radius: 0.8rem; padding: 0.9rem; }
-    .meta { color: #5c574e; font-size: 0.9rem; }
-    .due { color: #8a2b1b; font-weight: 700; }
-    ul { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
-    nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
-    .actions, .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
-    .actions button, .actions form { margin: 0; }
-    .secondary { background: #5c574e; }
-    .danger { background: #8a2b1b; }
-    details { margin-top: 0.5rem; }
-    label { display: flex; gap: 0.4rem; align-items: center; }
-    h2 { font-size: 1.25rem; margin: 0 0 0.75rem; }
-    nav.top { margin-bottom: 1rem; }
-    .layout { display: flex; flex-direction: column; gap: 1rem; }
-    section { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
-    .tree { display: flex; flex-direction: column; margin: 0.5rem 0; }
-    .tree a { display: flex; justify-content: space-between; padding: 0.45rem 0.5rem; border-radius: 0.4rem; color: inherit; text-decoration: none; }
-    .tree a.active { background: #e8e3d8; font-weight: 700; }
-    .count { color: #5c574e; font-size: 0.85rem; }
-    .subfolders { gap: 0.4rem; }
-    .row select { flex: 1; }
-    .image-text { white-space: pre-line; margin: 0; }
-    .shot { display: block; max-width: 100%; max-height: 24rem; margin: 0.4rem 0; border-radius: 0.5rem; }
-    .preview { display: flex; flex-direction: column; gap: 0.2rem; margin: 0.4rem 0; padding: 0.6rem; border-left: 3px solid #c8c2b4; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
-    @media (min-width: 52rem) {
-      main { max-width: 60rem; }
-      .layout { flex-direction: row; align-items: flex-start; }
-      aside { width: 16rem; flex-shrink: 0; position: sticky; top: 1rem; }
-      section { flex: 1; }
-    }
-  </style>
+  <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <main>
-    {% block body %}{% endblock %}
-  </main>
-  <script>
-    // Every form also sends the browser's timezone, so "friday 3pm" and the
-    // date picker are read in the user's time, not the server's.
-    (function () {
-      var zone = "";
-      try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (error) {}
-      document.querySelectorAll("form[method=post]").forEach(function (form) {
-        var input = document.createElement("input");
-        input.type = "hidden";
-        input.name = "tz";
-        input.value = zone;
-        form.appendChild(input);
-      });
-    })();
-  </script>
+  {% block body %}{% endblock %}
+  <script src="/static/app.js" defer></script>
 </body>
 </html>
