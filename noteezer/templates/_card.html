@@ -1,0 +1,143 @@
+{% from "_icons.html" import icon %}
+
+{% macro keep() -%}
+<input name="q" type="hidden" value="{{ query }}"><input name="folder" type="hidden" value="{{ folder }}">
+{%- endmacro %}
+
+{% macro card(item) %}
+{% set waiting = not item.sort and (
+  (has_folders and not item.folder_id)
+  or (item.kind == "reminder" and not item.status)
+  or (item.image and item.image.ai_allowed and not item.image.read)
+) %}
+<article class="note{% if item.task_done %} done{% endif %}{% if item.status == 'due' %} is-due{% endif %}" id="item-{{ item.id }}"{% if waiting %} data-pending{% endif %}>
+  <div class="note-lead">
+    {% if item.kind == "task" %}
+    <form method="post" action="/items/{{ item.id }}/done">
+      {{ keep() }}
+      <button class="check" type="submit" aria-label="{% if item.task_done %}Mark as not done{% else %}Mark as done{% endif %}">{{ icon("check" if item.task_done else "circle", 18) }}</button>
+    </form>
+    {% elif item.kind == "reminder" %}{{ icon("clock", 18) }}
+    {% elif item.kind == "link" %}{{ icon("link", 18) }}
+    {% elif item.kind == "idea" %}{{ icon("bulb", 18) }}
+    {% elif item.image %}{{ icon("image", 18) }}
+    {% else %}{{ icon("note", 18) }}
+    {% endif %}
+  </div>
+
+  <div class="note-main">
+    <div class="note-body">{{ item.body }}</div>
+
+    {% if item.image %}
+    <a href="/items/{{ item.id }}/image" target="_blank" rel="noopener">
+      <img class="shot" src="/items/{{ item.id }}/image" alt="{{ item.image.title or 'Saved image' }}" loading="lazy">
+    </a>
+    {% if item.image.text %}<p class="image-text">{{ item.image.text }}</p>{% endif %}
+    {% if not item.image.ai_allowed %}<p class="private">Private image: not read by AI.</p>{% endif %}
+    {% endif %}
+
+    {% if item.preview %}
+    <a class="preview" href="{{ item.preview.url }}" target="_blank" rel="noopener noreferrer">
+      <strong>{{ item.preview.title }}</strong>
+      <span>{{ item.preview.site }}{% if item.preview.description %} · {{ item.preview.description }}{% endif %}</span>
+    </a>
+    {% endif %}
+
+    <div class="note-meta">
+      <span class="chip">{{ item.kind }}{% if item.task_done %} · done{% endif %}</span>
+      {% if not current and folder != "unsorted" %}
+      {% if item.folder_id %}<a class="chip" href="/inbox?folder={{ item.folder_id }}">{{ icon("folder", 12) }}{{ item.folder_path }}</a>
+      {% else %}<span class="chip">{{ icon("inbox", 12) }}Unsorted</span>{% endif %}
+      {% endif %}
+      {% for tag in item.tags %}<span class="chip tag">#{{ tag }}</span>{% endfor %}
+      {% if item.status %}
+      <span class="chip{% if item.status == 'due' %} due{% endif %}">{{ icon("clock", 12) }}{{ item.status }} {{ item.remind_label }}</span>
+      {% elif item.kind == "reminder" %}
+      <span class="chip due">no time yet{% if waiting %}, reading it from the text…{% else %}, pick one under ⋯ Edit{% endif %}</span>
+      {% endif %}
+      {% if item.repeat_daily %}<span class="chip">daily{% if item.repeat_until %} until {{ item.repeat_until }}{% endif %}</span>{% endif %}
+      {% if item.folder_id and item.sort and item.sort.status == "filed" %}<span class="chip ai">{{ icon("sparkle", 12) }}filed by {{ item.sort.engine }}</span>{% endif %}
+      {% if item.split_from %}<span class="chip ai">split from a longer note</span>{% endif %}
+    </div>
+
+    {% set can_accept = not item.folder_id and item.sort and item.sort.status == "review" and item.sort.folder_path %}
+    {% set can_create = not item.folder_id and item.sort and item.sort.status == "review" and item.sort.proposed_path and not item.sort.folder_path %}
+    {% set can_remind = item.sort and item.sort.remind_label and item.kind != "reminder" %}
+    {% set note_line = not item.folder_id and has_folders %}
+    {% if can_accept or can_create or can_remind or item.split_from or note_line %}
+    <div class="suggest">
+      {% if note_line %}
+        {% if not item.sort %}<span class="hint">Sorting…</span>
+        {% elif can_accept %}<span>Suggested: {{ item.sort.folder_path }}</span>
+        {% elif can_create %}<span>New folder? {{ item.sort.proposed_path }}</span>
+        {% elif item.sort.status == "review" %}<span class="hint">No folder matched.</span>
+        {% elif item.sort.status == "retry" %}<span class="hint">Sorting failed, trying again soon.</span>
+        {% elif item.sort.status == "failed" %}<span class="hint">Could not be sorted.</span>
+        {% elif item.sort.status == "accepted" %}<span class="hint">Kept as one note. Move it when you like.</span>
+        {% endif %}
+      {% endif %}
+      {% if can_accept %}
+      <form method="post" action="/items/{{ item.id }}/accept">{{ keep() }}<button class="button primary" type="submit">Accept</button></form>
+      {% endif %}
+      {% if can_create %}
+      <form method="post" action="/items/{{ item.id }}/create-folder">{{ keep() }}<button class="button primary" type="submit">Create folder</button></form>
+      {% endif %}
+      {% if can_remind %}
+      <form method="post" action="/items/{{ item.id }}/remind">{{ keep() }}<button class="button" type="submit">{{ icon("clock", 14) }}Remind me {{ item.sort.remind_label }}</button></form>
+      {% endif %}
+      {% if item.split_from %}
+      <form method="post" action="/items/{{ item.id }}/unsplit" data-confirm="Put the original note back and remove all of its parts?">{{ keep() }}<button class="button ghost" type="submit">Undo split</button></form>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  <details class="menu">
+    <summary class="icon-button" aria-label="More actions">{{ icon("dots", 18) }}</summary>
+    <div class="menu-panel">
+      {% if item.kind == "reminder" %}
+      <div class="row">
+        <form method="post" action="/items/{{ item.id }}/done">{{ keep() }}<button class="button" type="submit">Done</button></form>
+        {% if item.status and item.status != "done" %}
+        <form method="post" action="/items/{{ item.id }}/snooze">{{ keep() }}<button class="button" type="submit">Snooze 1 hour</button></form>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      <span class="menu-label">Move to</span>
+      <form class="row" method="post" action="/items/{{ item.id }}/move">
+        <select name="target" aria-label="Move to">
+          <option value="">Unsorted</option>
+          {% for entry in folders %}
+          <option value="{{ entry.id }}" {% if entry.id == item.folder_id %}selected{% endif %}>{{ entry.path }}</option>
+          {% endfor %}
+        </select>
+        {{ keep() }}
+        <button class="button" type="submit">Move</button>
+      </form>
+
+      <details>
+        <summary>Edit</summary>
+        <form class="stack" method="post" action="/items/{{ item.id }}/edit">
+          <textarea name="body" required>{{ item.body }}</textarea>
+          <select name="kind" aria-label="Kind">
+            {% for value in ["note", "idea", "task", "link", "reminder"] %}
+            <option value="{{ value }}" {% if item.kind == value %}selected{% endif %}>{{ value|capitalize }}</option>
+            {% endfor %}
+          </select>
+          <input name="remind_at" type="datetime-local" value="{{ item.remind_local or '' }}" aria-label="Remind at">
+          <label><input name="repeat_daily" type="checkbox" value="1" {% if item.repeat_daily %}checked{% endif %}> Every day</label>
+          <input name="repeat_until" type="date" value="{{ item.repeat_until or '' }}" aria-label="Repeat until">
+          {{ keep() }}
+          <button class="button primary" type="submit">Save edit</button>
+        </form>
+      </details>
+
+      <form method="post" action="/items/{{ item.id }}/delete" data-confirm="Delete this note?">
+        {{ keep() }}
+        <button class="button danger wide" type="submit">Delete</button>
+      </form>
+    </div>
+  </details>
+</article>
+{% endmacro %}

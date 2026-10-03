@@ -39,6 +39,7 @@ Without Gemini, times come only from the picker. With Gemini, a line that starts
 
 - One process, Python, FastAPI, server-rendered pages, SQLite.
 - Due reminders appear at the top when you open the app. Snooze and done are supported.
+- A dark page in the style of Notion. Folders are in a sidebar, which becomes a drawer on a phone. Notes run from oldest to newest like a chat, with the newest just above the capture bar and due reminders pinned on top. Styles and a small script are in `noteezer/static`. Every button is a normal form, so the app also works without the script.
 - Minimal accounts: register, log in, and log out with email and password. Not a third feature domain.
 
 ## Left for later
@@ -66,4 +67,4 @@ Core logic tests, with coverage for the inbox, folder, sorting, link preview, Ge
 pytest --cov=noteezer.classify --cov=noteezer.inbox --cov=noteezer.reminders --cov=noteezer.users --cov=noteezer.passwords --cov=noteezer.folders --cov=noteezer.sorting --cov=noteezer.links --cov=noteezer.gemini --cov=noteezer.images --cov-report=term-missing
 ```
 
-That run is 88 tests and 96% coverage on those modules.
+That run is 89 tests and 96% coverage on those modules.

@@ -1,8 +1,10 @@
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from noteezer.db import connect, init_db
-from noteezer.inbox import delete_item, list_items, save_item, set_task_done, update_item
+from noteezer.inbox import delete_item, item_kind, list_items, save_item, set_task_done, toggle_task, update_item
 from noteezer.reminders import complete, next_occurrence, snooze
 from noteezer.users import register_user
 
@@ -89,4 +91,21 @@ def test_search_edit_delete_and_task_done(tmp_path: Path) -> None:
 
     delete_item(connection, owner, milk)
     assert list_items(connection, owner, query="oats") == []
+    connection.close()
+
+
+def test_done_is_decided_through_inbox_functions(tmp_path: Path) -> None:
+    connection = _db(tmp_path)
+    owner = _user(connection)
+    task = save_item(connection, owner, "todo fix hitbox", None, NOW)
+    note = save_item(connection, owner, "just a thought", None, NOW)
+    assert item_kind(connection, owner, task) == "task"
+    assert toggle_task(connection, owner, task) is True
+    assert toggle_task(connection, owner, task) is False
+    with pytest.raises(ValueError):
+        toggle_task(connection, owner, note)
+    with pytest.raises(LookupError):
+        item_kind(connection, owner, 999)
+    with pytest.raises(LookupError):
+        toggle_task(connection, owner, 999)
     connection.close()

@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone, tzinfo
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -22,7 +22,8 @@ from noteezer.inbox import (
     list_items,
     move_item,
     save_item,
-    set_task_done,
+    item_kind,
+    toggle_task,
     update_item,
 )
 from noteezer.reminders import complete, snooze
@@ -249,16 +250,15 @@ def register_routes(app: FastAPI) -> None:
             return RedirectResponse("/login", status_code=303)
         connection = connect()
         try:
-            row = connection.execute(
-                "SELECT kind, task_done FROM items WHERE id = ? AND user_id = ?",
-                (item_id, user_id),
-            ).fetchone()
-            if row is None:
-                pass
-            elif row["kind"] == "task":
-                set_task_done(connection, user_id, item_id, not bool(row["task_done"]))
-            elif row["kind"] == "reminder":
+            # Inbox answers what the item is; the route only picks which domain
+            # finishes it, so no route reads the items table itself.
+            kind = item_kind(connection, user_id, item_id)
+            if kind == "task":
+                toggle_task(connection, user_id, item_id)
+            elif kind == "reminder":
                 complete(connection, user_id, item_id, _now())
+        except LookupError:
+            pass
         finally:
             connection.close()
         return _inbox_redirect(q, folder)
@@ -463,6 +463,19 @@ def _render_inbox(
                 parent = names.get(item["sort"]["proposed_parent_id"])
                 name = item["sort"]["proposed_name"]
                 item["sort"]["proposed_path"] = f"{parent} / {name}" if parent else name
+    # Like a chat: due reminders are pinned on top, the rest run from oldest
+    # to newest so the newest line sits just above the capture bar.
+    today = _now().astimezone(zone).date()
+    due = [item for item in items if item["status"] == "due"]
+    timeline = [item for item in items if item["status"] != "due"][::-1]
+    for item in due + timeline:
+        item["day"] = _day_label(item["created_at"], zone, today)
+    by_id = {entry["id"]: entry for entry in folders}
+    crumbs = []
+    parent_id = current["parent_id"] if current else None
+    while parent_id is not None and parent_id in by_id:
+        crumbs.insert(0, by_id[parent_id])
+        parent_id = by_id[parent_id]["parent_id"]
     if current is not None:
         view = current["path"]
         view_key = str(current["id"])
@@ -478,6 +491,11 @@ def _render_inbox(
         {
             "title": view,
             "items": items,
+            "due": due,
+            "timeline": timeline,
+            "crumbs": crumbs,
+            "pending": any(item["sort"] is None and (not item["folder_id"] or item["kind"] == "reminder") for item in items)
+            and bool(folders),
             "folders": folders,
             "current": current,
             "subfolders": [entry for entry in folders if current and entry["parent_id"] == current["id"]],
@@ -492,6 +510,15 @@ def _render_inbox(
         },
         status_code=status_code,
     )
+
+
+def _day_label(created_at: str, zone: tzinfo, today: date) -> str:
+    day = datetime.fromisoformat(created_at).astimezone(zone).date()
+    if day == today:
+        return "Today"
+    if day == today - timedelta(days=1):
+        return "Yesterday"
+    return f"{day:%a} {day.day} {day:%b}" + ("" if day.year == today.year else f" {day.year}")
 
 
 def _draft(body: str, kind: str, remind_at: str, repeat_daily: bool, repeat_until: str) -> dict:

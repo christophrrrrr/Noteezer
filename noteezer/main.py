@@ -1,8 +1,10 @@
 import asyncio
 import contextlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from noteezer.db import connect, init_db
 from noteezer.sorting import sorter_from_env
@@ -32,5 +34,6 @@ def create_app() -> FastAPI:
     def health() -> dict[str, bool]:
         return {"ok": True}
 
+    app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
     register_routes(app)
     return app
