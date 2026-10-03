@@ -32,6 +32,8 @@ Updated: 2026-10-01. Sorting can now change more than the folder, but only throu
 
 Updated: 2026-10-03. The route that marks a line done read the `items` table itself, which crossed the seam. It now asks inbox with `item_kind` and `toggle_task`, and calls `complete` in reminders for a reminder. No route runs SQL anymore, so each table is read only by the module that owns it.
 
+Updated: 2026-10-03. Which folders a line is in is still written only by inbox (`set_folders`, `add_to_folder`, `file_unsorted_item`). Sorting owns `folder_suggestions` and `folder_checks`: when a folder is created, the worker runs `check_new_folders` and stores suggestions, and `accept_also` asks inbox to add the line.
+
 ## [3]. How inbox rows relate to reminder rows
 
 Date: 2026-09-26
@@ -50,6 +52,8 @@ Updated: 2026-09-30. `sort_results` uses `item_id` as its primary key, like `rem
 Updated: 2026-10-01. `users.timezone` stores the browser's IANA zone, such as Europe/Madrid. `items.split_from` points a part at the line it was split from, with `ON DELETE SET NULL`, and `items.hidden` hides that original while its parts exist. Undo split deletes the parts and clears `hidden`. Deleting the original was rejected because a bad split could not be undone. `sort_results.suggested_remind_at` holds a time Gemini read from a line that is not a reminder, until the user accepts it. A reminder item may now exist without a `reminders` row while it waits for a time.
 
 Updated: 2026-10-01. `images` uses `item_id` as its primary key, so a line has at most one image, and it is deleted with the line. It stores the bytes as a BLOB, the type found by `check_image`, `ai_allowed` from the checkbox, and the `title` and `text` Gemini read. Files in a folder next to the database were rejected: the assignment wants one documented SQLite path, and a folder of files could keep images whose line is gone. The cost is a larger database file; images are capped at 10 MB.
+
+Updated: 2026-10-03. A line can now be in several folders. `items.folder_id` was replaced by `item_folders (item_id, folder_id)`, with both keys `ON DELETE CASCADE`, so deleting a folder only removes its memberships, and a line with no membership is in Unsorted. This changed because a table tennis video was filed into Table Tennis, and later it also belonged in a new Cool videos folder; with one folder per line the user had to choose. Rejected: copying the line into each folder, because an edit or a done task would then have to be kept in sync. `folder_suggestions (item_id, folder_id)` holds "Also add to" suggestions from a new-folder check, and `folder_checks (folder_id)` queues those checks. Old databases are rebuilt once on startup, and every old `folder_id` becomes a row in `item_folders`.
 
 ## [4]. Testing approach
 

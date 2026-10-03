@@ -11,10 +11,10 @@ from noteezer.classify import classify
 from noteezer.folders import FolderError, create_folder, find_folder, list_folders
 from noteezer.images import Image, readable_image, record_reading
 from noteezer.inbox import (
+    add_to_folder,
     change_plain_note_kind,
     file_unsorted_item,
     make_reminder,
-    move_item,
     schedule_unset_reminder,
     split_item,
     undo_split,
@@ -71,6 +71,13 @@ class Suggestion:
     parts: tuple[Part, ...] = ()
     image_title: str | None = None
     image_text: str | None = None
+    also: tuple[int, ...] = ()  # more folders it clearly belongs in, filed along with folder_id
+
+
+@dataclass(frozen=True)
+class Candidate:
+    id: int
+    text: str
 
 
 class Sorter(Protocol):
@@ -78,14 +85,18 @@ class Sorter(Protocol):
 
     def suggest(self, note: Note, folders: list[FolderOption]) -> Suggestion: ...
 
+    def match_folder(self, folder: FolderOption, candidates: list[Candidate]) -> list[int]: ...
+
 
 class RulesSorter:
     """Files a line into a folder whose name it mentions or tags.
 
     Link titles count as text, so a video called "Climbing tips" matches a
-    Climbing folder. When all matches sit on one branch (Game and Game / Maps),
-    the deepest one wins with high confidence. Matches on different branches
-    are a guess, so the item waits in Unsorted with a suggestion.
+    Climbing folder. Every folder named by a #tag is the user's own choice, so
+    the line goes into all of them. Otherwise, when all matches sit on one
+    branch (Game and Game / Maps), the deepest one wins with high confidence.
+    Matches on different branches are a guess, so the item waits in Unsorted
+    with a suggestion.
     """
 
     name = "rules"
@@ -93,6 +104,14 @@ class RulesSorter:
     def suggest(self, note: Note, folders: list[FolderOption]) -> Suggestion:
         text = " ".join([note.body, *(link.title for link in note.links)])
         tag_keys = {_key(tag) for tag in note.tags}
+        tagged = sorted(
+            (folder for folder in folders if _key(folder.name) in tag_keys),
+            key=lambda folder: -folder.path.count(" / "),
+        )
+        if tagged:
+            return Suggestion(
+                tagged[0].id, 0.9, engine=self.name, also=tuple(folder.id for folder in tagged[1:])
+            )
         matches = [
             folder for folder in folders if _key(folder.name) in tag_keys or _mentions(text, folder.name)
         ]
@@ -104,6 +123,9 @@ class RulesSorter:
             for folder in matches
         )
         return Suggestion(deepest.id, 0.9 if one_branch else 0.5, engine=self.name)
+
+    def match_folder(self, folder: FolderOption, candidates: list[Candidate]) -> list[int]:
+        return [candidate.id for candidate in candidates if _mentions(candidate.text, folder.name)]
 
 
 def sorter_from_env() -> Sorter:
@@ -136,13 +158,15 @@ def sort_pending(
     # fetch_preview is passed by the worker; without it no link is fetched.
     rows = connection.execute(
         """
-        SELECT i.id, i.user_id, i.body, i.kind, i.folder_id, i.split_from, r.attempts
+        SELECT i.id, i.user_id, i.body, i.kind, i.split_from, r.attempts,
+               EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id) AS filed
         FROM items i
         LEFT JOIN sort_results r ON r.item_id = i.id
         WHERE i.hidden = 0
           AND (r.item_id IS NULL OR (r.status = 'retry' AND r.retry_at <= ?))
           AND (
-            (i.folder_id IS NULL AND EXISTS (SELECT 1 FROM folders f WHERE f.user_id = i.user_id))
+            (NOT EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id)
+             AND EXISTS (SELECT 1 FROM folders f WHERE f.user_id = i.user_id))
             OR (i.kind = 'reminder' AND NOT EXISTS (SELECT 1 FROM reminders m WHERE m.item_id = i.id))
             OR EXISTS (SELECT 1 FROM images g WHERE g.item_id = i.id AND g.ai_allowed = 1 AND g.read_at IS NULL)
           )
@@ -201,7 +225,7 @@ def accept_suggestion(connection: sqlite3.Connection, user_id: int, item_id: int
     if row is None:
         raise LookupError("no suggestion to accept")
     folder_id = int(row["folder_id"])
-    move_item(connection, user_id, item_id, folder_id)
+    add_to_folder(connection, user_id, item_id, folder_id)
     connection.execute("UPDATE sort_results SET status = 'accepted' WHERE item_id = ?", (item_id,))
     connection.commit()
     return folder_id
@@ -229,9 +253,10 @@ def accept_proposal(connection: sqlite3.Connection, user_id: int, item_id: int, 
         if existing is None:
             raise
         folder_id = existing
-    move_item(connection, user_id, item_id, folder_id)
+    add_to_folder(connection, user_id, item_id, folder_id)
     connection.execute("UPDATE sort_results SET status = 'accepted' WHERE item_id = ?", (item_id,))
     connection.commit()
+    request_folder_check(connection, folder_id, now)
     return folder_id
 
 
@@ -263,6 +288,93 @@ def undo_auto_split(connection: sqlite3.Connection, user_id: int, item_id: int) 
     return original
 
 
+def request_folder_check(connection: sqlite3.Connection, folder_id: int, now: datetime) -> None:
+    # Queued when a folder is created, so the worker can look through lines
+    # that are already filed and suggest the ones that also belong here.
+    connection.execute(
+        """
+        INSERT INTO folder_checks (folder_id, requested_at) VALUES (?, ?)
+        ON CONFLICT(folder_id) DO UPDATE SET requested_at = excluded.requested_at, checked_at = NULL, attempts = 0
+        """,
+        (folder_id, _iso(now)),
+    )
+    connection.commit()
+
+
+def check_new_folders(connection: sqlite3.Connection, sorter: Sorter, now: datetime, limit: int = 1) -> int:
+    """Suggests already filed lines for a newly created folder.
+
+    One engine call per folder reviews up to CHECK_CANDIDATES recent lines that
+    are filed somewhere else. Matches become "Also add" suggestions; nothing is
+    moved without the user. Lines still in Unsorted are left to sort_pending.
+    """
+    checks = connection.execute(
+        """
+        SELECT c.folder_id, c.attempts, f.user_id
+        FROM folder_checks c JOIN folders f ON f.id = c.folder_id
+        WHERE c.checked_at IS NULL
+        ORDER BY c.requested_at
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    for check in checks:
+        folder_id = int(check["folder_id"])
+        user_id = int(check["user_id"])
+        folder = next(
+            FolderOption(entry["id"], entry["name"], entry["path"])
+            for entry in list_folders(connection, user_id)
+            if entry["id"] == folder_id
+        )
+        candidates = _candidates(connection, user_id, folder_id)
+        try:
+            matched = sorter.match_folder(folder, candidates) if candidates else []
+        except Exception as error:  # an engine can fail on network or quota; the check is tried again
+            log.warning("Checking folder %s with %s failed: %s", folder_id, sorter.name, error)
+            attempts = int(check["attempts"]) + 1
+            connection.execute(
+                "UPDATE folder_checks SET attempts = ?, checked_at = ? WHERE folder_id = ?",
+                (attempts, _iso(now) if attempts >= 3 else None, folder_id),
+            )
+            connection.commit()
+            continue
+        allowed = {candidate.id for candidate in candidates}
+        connection.executemany(
+            "INSERT OR IGNORE INTO folder_suggestions (item_id, folder_id) VALUES (?, ?)",
+            [(item_id, folder_id) for item_id in matched if item_id in allowed],
+        )
+        connection.execute("UPDATE folder_checks SET checked_at = ? WHERE folder_id = ?", (_iso(now), folder_id))
+        connection.commit()
+    return len(checks)
+
+
+def also_suggestions_for(connection: sqlite3.Connection, user_id: int) -> dict[int, list[int]]:
+    rows = connection.execute(
+        """
+        SELECT s.item_id, s.folder_id FROM folder_suggestions s
+        JOIN items i ON i.id = s.item_id
+        WHERE i.user_id = ?
+          AND NOT EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = s.item_id AND m.folder_id = s.folder_id)
+        ORDER BY s.folder_id
+        """,
+        (user_id,),
+    ).fetchall()
+    suggestions: dict[int, list[int]] = {}
+    for row in rows:
+        suggestions.setdefault(int(row["item_id"]), []).append(int(row["folder_id"]))
+    return suggestions
+
+
+def accept_also(connection: sqlite3.Connection, user_id: int, item_id: int, folder_id: int) -> None:
+    _forget_also(connection, user_id, item_id, folder_id)
+    add_to_folder(connection, user_id, item_id, folder_id)
+
+
+def dismiss_also(connection: sqlite3.Connection, user_id: int, item_id: int, folder_id: int) -> None:
+    _forget_also(connection, user_id, item_id, folder_id)
+    connection.commit()
+
+
 def resort_if_waiting(connection: sqlite3.Connection, user_id: int, item_id: int) -> bool:
     # After an edit turns a line into a reminder without a time, its old sort
     # result is dropped so the sorter reads the new text for a time.
@@ -287,7 +399,10 @@ def requeue_unsorted(connection: sqlite3.Connection, user_id: int, only_unmatche
     # suggestion are left alone so an AI engine is not asked again for all of them.
     sql = """
         DELETE FROM sort_results
-        WHERE item_id IN (SELECT id FROM items WHERE user_id = ? AND folder_id IS NULL)
+        WHERE item_id IN (
+            SELECT id FROM items i
+            WHERE i.user_id = ? AND NOT EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id)
+        )
     """
     if only_unmatched:
         sql += " AND status = 'review' AND folder_id IS NULL AND proposed_name IS NULL"
@@ -319,6 +434,45 @@ def results_for(connection: sqlite3.Connection, user_id: int) -> dict[int, dict]
         }
         for row in rows
     }
+
+
+CHECK_CANDIDATES = 60
+
+
+def _candidates(connection: sqlite3.Connection, user_id: int, folder_id: int) -> list[Candidate]:
+    # Recent lines that are filed somewhere else, with their link or image
+    # title, so the engine can tell what a bare link is about.
+    rows = connection.execute(
+        """
+        SELECT i.id, i.body, p.title AS link_title, g.title AS image_title
+        FROM items i
+        LEFT JOIN link_previews p ON p.item_id = i.id
+        LEFT JOIN images g ON g.item_id = i.id
+        WHERE i.user_id = ? AND i.hidden = 0
+          AND EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id)
+          AND NOT EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id AND m.folder_id = ?)
+        ORDER BY i.created_at DESC
+        LIMIT ?
+        """,
+        (user_id, folder_id, CHECK_CANDIDATES),
+    ).fetchall()
+    candidates = []
+    for row in rows:
+        text = " ".join(part for part in (row["body"], row["link_title"], row["image_title"]) if part)
+        candidates.append(Candidate(int(row["id"]), " ".join(text.split())[:300]))
+    return candidates
+
+
+def _forget_also(connection: sqlite3.Connection, user_id: int, item_id: int, folder_id: int) -> None:
+    cursor = connection.execute(
+        """
+        DELETE FROM folder_suggestions
+        WHERE item_id = ? AND folder_id = ? AND item_id IN (SELECT id FROM items WHERE user_id = ?)
+        """,
+        (item_id, folder_id, user_id),
+    )
+    if cursor.rowcount == 0:
+        raise LookupError("no such suggestion")
 
 
 def _links(
@@ -355,7 +509,7 @@ def _apply(
     item_id = int(row["id"])
     engine = suggestion.engine or engine
     known = {option.id for option in options}
-    unsorted = row["folder_id"] is None
+    unsorted = not row["filed"]
 
     parts = [part for part in suggestion.parts if part.text.strip()]
     if unsorted and row["split_from"] is None and len(parts) >= 2:
@@ -373,6 +527,9 @@ def _apply(
         try:
             if file_unsorted_item(connection, user_id, item_id, folder_id):
                 status = "filed"
+                for extra in suggestion.also:
+                    if extra in known and extra != folder_id:
+                        add_to_folder(connection, user_id, item_id, extra)
         except LookupError:
             folder_id = None
 

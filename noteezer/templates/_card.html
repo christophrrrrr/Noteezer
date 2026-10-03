@@ -6,7 +6,7 @@
 
 {% macro card(item) %}
 {% set waiting = not item.sort and (
-  (has_folders and not item.folder_id)
+  (has_folders and not item.folder_ids)
   or (item.kind == "reminder" and not item.status)
   or (item.image and item.image.ai_allowed and not item.image.read)
 ) %}
@@ -45,10 +45,10 @@
 
     <div class="note-meta">
       <span class="chip">{{ item.kind }}{% if item.task_done %} · done{% endif %}</span>
-      {% if not current and folder != "unsorted" %}
-      {% if item.folder_id %}<a class="chip" href="/inbox?folder={{ item.folder_id }}">{{ icon("folder", 12) }}{{ item.folder_path }}</a>
-      {% else %}<span class="chip">{{ icon("inbox", 12) }}Unsorted</span>{% endif %}
-      {% endif %}
+      {% for in_folder in item.folders if not current or in_folder.id != current.id %}
+      <a class="chip" href="/inbox?folder={{ in_folder.id }}">{{ icon("folder", 12) }}{{ in_folder.path }}</a>
+      {% endfor %}
+      {% if not item.folders and not current and folder != "unsorted" %}<span class="chip">{{ icon("inbox", 12) }}Unsorted</span>{% endif %}
       {% for tag in item.tags %}<span class="chip tag">#{{ tag }}</span>{% endfor %}
       {% if item.status %}
       <span class="chip{% if item.status == 'due' %} due{% endif %}">{{ icon("clock", 12) }}{{ item.status }} {{ item.remind_label }}</span>
@@ -56,15 +56,15 @@
       <span class="chip due">no time yet{% if waiting %}, reading it from the text…{% else %}, pick one under ⋯ Edit{% endif %}</span>
       {% endif %}
       {% if item.repeat_daily %}<span class="chip">daily{% if item.repeat_until %} until {{ item.repeat_until }}{% endif %}</span>{% endif %}
-      {% if item.folder_id and item.sort and item.sort.status == "filed" %}<span class="chip ai">{{ icon("sparkle", 12) }}filed by {{ item.sort.engine }}</span>{% endif %}
+      {% if item.folder_ids and item.sort and item.sort.status == "filed" %}<span class="chip ai">{{ icon("sparkle", 12) }}filed by {{ item.sort.engine }}</span>{% endif %}
       {% if item.split_from %}<span class="chip ai">split from a longer note</span>{% endif %}
     </div>
 
-    {% set can_accept = not item.folder_id and item.sort and item.sort.status == "review" and item.sort.folder_path %}
-    {% set can_create = not item.folder_id and item.sort and item.sort.status == "review" and item.sort.proposed_path and not item.sort.folder_path %}
+    {% set can_accept = not item.folder_ids and item.sort and item.sort.status == "review" and item.sort.folder_path %}
+    {% set can_create = not item.folder_ids and item.sort and item.sort.status == "review" and item.sort.proposed_path and not item.sort.folder_path %}
     {% set can_remind = item.sort and item.sort.remind_label and item.kind != "reminder" %}
-    {% set note_line = not item.folder_id and has_folders %}
-    {% if can_accept or can_create or can_remind or item.split_from or note_line %}
+    {% set note_line = not item.folder_ids and has_folders %}
+    {% if can_accept or can_create or can_remind or item.split_from or note_line or item.also %}
     <div class="suggest">
       {% if note_line %}
         {% if not item.sort %}<span class="hint">Sorting…</span>
@@ -85,6 +85,10 @@
       {% if can_remind %}
       <form method="post" action="/items/{{ item.id }}/remind">{{ keep() }}<button class="button" type="submit">{{ icon("clock", 14) }}Remind me {{ item.sort.remind_label }}</button></form>
       {% endif %}
+      {% for extra in item.also %}
+      <form method="post" action="/items/{{ item.id }}/also/{{ extra.id }}">{{ keep() }}<button class="button" type="submit">{{ icon("plus", 14) }}Also add to {{ extra.path }}</button></form>
+      <form method="post" action="/items/{{ item.id }}/also/{{ extra.id }}/dismiss">{{ keep() }}<button class="icon-button" type="submit" aria-label="Not in {{ extra.path }}">{{ icon("x", 14) }}</button></form>
+      {% endfor %}
       {% if item.split_from %}
       <form method="post" action="/items/{{ item.id }}/unsplit" data-confirm="Put the original note back and remove all of its parts?">{{ keep() }}<button class="button ghost" type="submit">Undo split</button></form>
       {% endif %}
@@ -104,17 +108,18 @@
       </div>
       {% endif %}
 
-      <span class="menu-label">Move to</span>
-      <form class="row" method="post" action="/items/{{ item.id }}/move">
-        <select name="target" aria-label="Move to">
-          <option value="">Unsorted</option>
+      {% if folders %}
+      <span class="menu-label">Folders</span>
+      <form class="stack" method="post" action="/items/{{ item.id }}/folders">
+        <div class="checklist">
           {% for entry in folders %}
-          <option value="{{ entry.id }}" {% if entry.id == item.folder_id %}selected{% endif %}>{{ entry.path }}</option>
+          <label style="--depth: {{ entry.depth }}"><input name="folders" type="checkbox" value="{{ entry.id }}" {% if entry.id in item.folder_ids %}checked{% endif %}> {{ entry.name }}</label>
           {% endfor %}
-        </select>
+        </div>
         {{ keep() }}
-        <button class="button" type="submit">Move</button>
+        <button class="button" type="submit">Save folders</button>
       </form>
+      {% endif %}
 
       <details>
         <summary>Edit</summary>

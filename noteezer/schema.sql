@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS folders (
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
-    folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
     body TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('note', 'idea', 'task', 'link', 'reminder')),
     task_done INTEGER NOT NULL DEFAULT 0 CHECK (task_done IN (0, 1)),
@@ -28,6 +27,25 @@ CREATE TABLE IF NOT EXISTS items (
     split_from INTEGER REFERENCES items(id) ON DELETE SET NULL,
     hidden INTEGER NOT NULL DEFAULT 0,
     CHECK (kind = 'task' OR task_done = 0)
+);
+
+CREATE TABLE IF NOT EXISTS item_folders (
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    PRIMARY KEY (item_id, folder_id)
+);
+
+CREATE TABLE IF NOT EXISTS folder_suggestions (
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    PRIMARY KEY (item_id, folder_id)
+);
+
+CREATE TABLE IF NOT EXISTS folder_checks (
+    folder_id INTEGER PRIMARY KEY REFERENCES folders(id) ON DELETE CASCADE,
+    requested_at TEXT NOT NULL,
+    checked_at TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS tags (
@@ -87,7 +105,7 @@ CREATE TABLE IF NOT EXISTS link_previews (
 );
 
 CREATE INDEX IF NOT EXISTS idx_items_user_created ON items (user_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_items_folder ON items (user_id, folder_id);
+CREATE INDEX IF NOT EXISTS idx_item_folders_folder ON item_folders (folder_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_sibling_name
     ON folders (user_id, IFNULL(parent_id, 0), name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders (status, remind_at);

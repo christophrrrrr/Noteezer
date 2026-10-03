@@ -126,7 +126,7 @@ def test_a_private_image_is_never_sent_and_a_filed_one_is_still_read(tmp_path: P
     seen = {note.body: note.image for note in reader.notes}
     assert seen["bank app"] is None
     assert seen[PLACEHOLDER] is not None
-    assert list_items(connection, owner, folder_id=climbing)[0]["folder_id"] == climbing
+    assert list_items(connection, owner, folder_id=climbing)[0]["folder_ids"] == [climbing]
     assert {item["body"] for item in list_items(connection, owner, folder_id=climbing)} == {
         "Route topo for Albarracin",
         PLACEHOLDER,
@@ -144,7 +144,7 @@ def test_gemini_gets_the_image_and_returns_a_title_and_its_text() -> None:
     picture = Image(PNG, "image/png")
     seen = []
 
-    def model(system, prompt, image=None):
+    def model(system, prompt, image=None, schema=None):
         seen.append((prompt, image))
         return json.dumps(
             {

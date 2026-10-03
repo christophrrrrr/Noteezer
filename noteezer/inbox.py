@@ -27,12 +27,14 @@ def save_item(
     stamp = now.astimezone(timezone.utc).isoformat()
     cursor = connection.execute(
         """
-        INSERT INTO items (user_id, folder_id, body, kind, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO items (user_id, body, kind, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (user_id, folder_id, classified.body, classified.kind, stamp, stamp),
+        (user_id, classified.body, classified.kind, stamp, stamp),
     )
     item_id = int(cursor.lastrowid)
+    if folder_id is not None:
+        connection.execute("INSERT INTO item_folders (item_id, folder_id) VALUES (?, ?)", (item_id, folder_id))
     _attach_tags(connection, user_id, item_id, classified.tags)
     if classified.kind == "reminder" and remind_at is not None:
         schedule(connection, item_id, remind_at, now, repeat_daily, repeat_until)
@@ -87,20 +89,42 @@ def delete_item(connection: sqlite3.Connection, user_id: int, item_id: int) -> N
     connection.commit()
 
 
+def set_folders(
+    connection: sqlite3.Connection,
+    user_id: int,
+    item_id: int,
+    folder_ids: list[int],
+) -> None:
+    """Puts an item in exactly these folders. An empty list means Unsorted."""
+    _owned_item(connection, user_id, item_id)
+    for folder_id in folder_ids:
+        require_folder(connection, user_id, folder_id)
+    connection.execute("DELETE FROM item_folders WHERE item_id = ?", (item_id,))
+    connection.executemany(
+        "INSERT OR IGNORE INTO item_folders (item_id, folder_id) VALUES (?, ?)",
+        [(item_id, folder_id) for folder_id in folder_ids],
+    )
+    connection.commit()
+
+
 def move_item(
     connection: sqlite3.Connection,
     user_id: int,
     item_id: int,
     folder_id: int | None,
 ) -> None:
+    set_folders(connection, user_id, item_id, [] if folder_id is None else [folder_id])
+
+
+def add_to_folder(connection: sqlite3.Connection, user_id: int, item_id: int, folder_id: int) -> bool:
     _owned_item(connection, user_id, item_id)
-    if folder_id is not None:
-        require_folder(connection, user_id, folder_id)
-    connection.execute(
-        "UPDATE items SET folder_id = ? WHERE id = ? AND user_id = ?",
-        (folder_id, item_id, user_id),
+    require_folder(connection, user_id, folder_id)
+    cursor = connection.execute(
+        "INSERT OR IGNORE INTO item_folders (item_id, folder_id) VALUES (?, ?)",
+        (item_id, folder_id),
     )
     connection.commit()
+    return cursor.rowcount == 1
 
 
 def file_unsorted_item(
@@ -113,7 +137,12 @@ def file_unsorted_item(
     # Unsorted, so it never undoes a move the user made in the meantime.
     require_folder(connection, user_id, folder_id)
     cursor = connection.execute(
-        "UPDATE items SET folder_id = ? WHERE id = ? AND user_id = ? AND folder_id IS NULL",
+        """
+        INSERT INTO item_folders (item_id, folder_id)
+        SELECT id, ? FROM items
+        WHERE id = ? AND user_id = ?
+          AND NOT EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = items.id)
+        """,
         (folder_id, item_id, user_id),
     )
     connection.commit()
@@ -186,7 +215,7 @@ def split_item(
     undo_split can delete the parts and show the original again.
     """
     row = connection.execute(
-        "SELECT folder_id, split_from, hidden FROM items WHERE id = ? AND user_id = ?",
+        "SELECT split_from, hidden FROM items WHERE id = ? AND user_id = ?",
         (item_id, user_id),
     ).fetchone()
     if row is None:
@@ -199,8 +228,12 @@ def split_item(
     created = []
     for body, kind in cleaned:
         forced = kind if kind in ("note", "idea", "task") and not URL_PATTERN.search(body) else None
-        part_id = save_item(connection, user_id, body, None, now, forced_kind=forced, folder_id=row["folder_id"])
+        part_id = save_item(connection, user_id, body, None, now, forced_kind=forced)
         connection.execute("UPDATE items SET split_from = ? WHERE id = ?", (item_id, part_id))
+        connection.execute(
+            "INSERT INTO item_folders (item_id, folder_id) SELECT ?, folder_id FROM item_folders WHERE item_id = ?",
+            (part_id, item_id),
+        )
         created.append(part_id)
     connection.execute("UPDATE items SET hidden = 1 WHERE id = ?", (item_id,))
     connection.commit()
@@ -224,11 +257,37 @@ def undo_split(connection: sqlite3.Connection, user_id: int, item_id: int) -> in
 
 
 def count_by_folder(connection: sqlite3.Connection, user_id: int) -> dict[int | None, int]:
+    # A line in two folders counts in both. None is the number in Unsorted.
     rows = connection.execute(
-        "SELECT folder_id, COUNT(*) AS total FROM items WHERE user_id = ? AND hidden = 0 GROUP BY folder_id",
+        """
+        SELECT m.folder_id, COUNT(*) AS total
+        FROM item_folders m JOIN items i ON i.id = m.item_id
+        WHERE i.user_id = ? AND i.hidden = 0
+        GROUP BY m.folder_id
+        """,
         (user_id,),
     ).fetchall()
-    return {row["folder_id"]: int(row["total"]) for row in rows}
+    counts: dict[int | None, int] = {row["folder_id"]: int(row["total"]) for row in rows}
+    unsorted = connection.execute(
+        """
+        SELECT COUNT(*) AS total FROM items i
+        WHERE i.user_id = ? AND i.hidden = 0
+          AND NOT EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id)
+        """,
+        (user_id,),
+    ).fetchone()["total"]
+    if unsorted:
+        counts[None] = int(unsorted)
+    return counts
+
+
+def count_items(connection: sqlite3.Connection, user_id: int) -> int:
+    return int(
+        connection.execute(
+            "SELECT COUNT(*) AS total FROM items WHERE user_id = ? AND hidden = 0",
+            (user_id,),
+        ).fetchone()["total"]
+    )
 
 
 def item_kind(connection: sqlite3.Connection, user_id: int, item_id: int) -> str:
@@ -275,7 +334,7 @@ def list_items(
     if now is not None:
         refresh(connection, user_id, now)
     sql = """
-        SELECT i.id, i.folder_id, i.body, i.kind, i.task_done, i.created_at, i.split_from,
+        SELECT i.id, i.body, i.kind, i.task_done, i.created_at, i.split_from,
                r.remind_at, r.status, r.repeat_daily, r.repeat_until
         FROM items i
         LEFT JOIN reminders r ON r.item_id = i.id
@@ -283,9 +342,9 @@ def list_items(
     """
     parameters: list[object] = [user_id]
     if unsorted:
-        sql += " AND i.folder_id IS NULL"
+        sql += " AND NOT EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id)"
     elif folder_id is not None:
-        sql += " AND i.folder_id = ?"
+        sql += " AND EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id AND m.folder_id = ?)"
         parameters.append(folder_id)
     cleaned = query.strip()
     if cleaned:
@@ -299,8 +358,14 @@ def list_items(
     sql += " ORDER BY CASE WHEN r.status = 'due' THEN 0 ELSE 1 END, i.created_at DESC"
     rows = connection.execute(sql, parameters).fetchall()
     tags_by_item: dict[int, list[str]] = {int(row["id"]): [] for row in rows}
+    folders_by_item: dict[int, list[int]] = {int(row["id"]): [] for row in rows}
     if tags_by_item:
         placeholders = ",".join("?" for _ in tags_by_item)
+        for membership in connection.execute(
+            f"SELECT item_id, folder_id FROM item_folders WHERE item_id IN ({placeholders}) ORDER BY folder_id",
+            tuple(folders_by_item),
+        ):
+            folders_by_item[int(membership["item_id"])].append(int(membership["folder_id"]))
         tag_rows = connection.execute(
             f"""
             SELECT it.item_id, t.name
@@ -316,7 +381,7 @@ def list_items(
     return [
         {
             "id": int(row["id"]),
-            "folder_id": row["folder_id"],
+            "folder_ids": folders_by_item[int(row["id"])],
             "body": row["body"],
             "kind": row["kind"],
             "task_done": bool(row["task_done"]),
