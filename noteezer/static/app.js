@@ -1,5 +1,12 @@
 // Small enhancements on top of plain forms. Every action still works without it.
 (function () {
+  // The service worker makes Noteezer installable as a phone app.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("/sw.js").catch(function () {});
+    });
+  }
+
   // Every form also sends the browser's timezone, so "friday 3pm" and the
   // date picker are read in the user's time, not the server's.
   var zone = "";

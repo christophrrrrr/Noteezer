@@ -59,3 +59,15 @@ Context: Grading needs at least 70% coverage of the core rules. The rules that c
 Decision: pytest calls the domain modules (`classify`, `inbox`, `folders`, `sorting`, `reminders`, `users`, `passwords`) directly against a real SQLite file in a temporary folder. Each test passes a fixed `now` and uses fake sorter engines. Coverage is measured on those modules only, with pytest-cov. A few `TestClient` tests check that the routes are wired up.
 Alternatives considered: Mocking `sqlite3` was rejected because cascades, unique indexes, and the upgrade of old databases are rules that live in SQLite, and only a real database proves them. Browser tests were rejected because they are slow and check layout, not decisions.
 Consequences: 54 tests cover 96% of those modules. The background worker loop, the routes, and the templates are tested less: a broken route shows up in the `TestClient` tests or by hand, not in the coverage number. An engine that calls an outside API will be tested with a fake, so the tests never need a network connection or a key.
+
+Updated: 2026-10-03. The suite is now 94 tests at 96% of the domain modules, which now also include `links`, `gemini`, and `images`. Gemini, web pages, and the clock are always faked, so the tests never need a key, a network connection, or a particular day.
+
+## [5]. Reminders are not pushed to the phone
+
+Date: 2026-10-03
+Status: Decided
+Context: A reminder helps most when it reaches the phone at the right time, even while the app is closed. Noteezer now installs as a phone app, so push notifications look like the obvious next step.
+Decision: Push notifications are not built in this assignment. A due reminder is shown at the top when the app is opened, and the background task only sorts lines; it never sends anything to the phone.
+Alternatives considered: Web Push sent from the existing in-process background task fits the single-process rule, because it only calls the browser's push service. It was rejected for now because a reminder would only arrive while the computer running Noteezer is on, which is not true for a laptop at home. It also needs signing keys kept in environment variables, a table of phone subscriptions, and another dependency for encrypting the messages. A second always-on process just for notifications was rejected because the assignment allows only one.
+Consequences: A reminder is missed if the app is not opened around its time. Push can be added in Assignment 2, once the app runs on an always-on server: the reminders side would store subscriptions and send due reminders, without changing how lines are captured.
+

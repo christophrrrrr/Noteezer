@@ -3,7 +3,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from noteezer.classify import ClassificationError
@@ -42,6 +42,8 @@ from noteezer.sorting import (
 from noteezer.users import AccountError, authenticate, register_user, set_timezone, user_timezone
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
+STATIC = Path(__file__).with_name("static")
+SESSION_DAYS = 90
 UNSORTED = "unsorted"
 
 
@@ -148,6 +150,49 @@ def register_routes(app: FastAPI) -> None:
             connection.close()
         _wake_sorter(request)
         return _inbox_redirect(q, folder)
+
+    @app.get("/sw.js")
+    def service_worker():
+        # Served from the root so it may control every page, and never cached
+        # by the browser so a new version is picked up on the next visit.
+        return FileResponse(STATIC / "sw.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/manifest.webmanifest")
+    def manifest():
+        return FileResponse(STATIC / "manifest.webmanifest", media_type="application/manifest+json")
+
+    @app.post("/share")
+    def share(
+        request: Request,
+        title: str = Form(""),
+        text: str = Form(""),
+        url: str = Form(""),
+        image: UploadFile | None = File(None),
+    ):
+        # Android's share sheet posts here once the app is installed (see
+        # share_target in the manifest). The line goes to Unsorted and is
+        # sorted like any other.
+        user_id = _current_user(request)
+        if user_id is None:
+            return RedirectResponse("/login", status_code=303)
+        body = _shared_line(title, text, url)
+        picture = _uploaded(image)
+        if picture is None and not body:
+            return _inbox_redirect("", UNSORTED)
+        connection = connect()
+        try:
+            if picture is not None:
+                check_image(picture)
+                body = body or PLACEHOLDER
+            item_id = save_item(connection, user_id, body, None, _now())
+            if picture is not None:
+                attach_image(connection, item_id, picture, ai_allowed=True)
+        except (ClassificationError, ImageError, ValueError) as error:
+            return _render_inbox(request, user_id, "", UNSORTED, None, _message(error), status_code=400)
+        finally:
+            connection.close()
+        _wake_sorter(request)
+        return _inbox_redirect("", UNSORTED)
 
     @app.get("/items/{item_id}/image")
     def item_image(request: Request, item_id: int):
@@ -550,7 +595,15 @@ def _account_page(request: Request, title: str, other_href: str, other_label: st
 
 def _logged_in(user_id: int) -> RedirectResponse:
     response = RedirectResponse("/inbox", status_code=303)
-    response.set_cookie(COOKIE_NAME, sign_user_id(user_id), httponly=True, samesite="lax")
+    # A lasting cookie, so the installed phone app stays logged in after
+    # Android closes it.
+    response.set_cookie(
+        COOKIE_NAME,
+        sign_user_id(user_id),
+        max_age=SESSION_DAYS * 24 * 60 * 60,
+        httponly=True,
+        samesite="lax",
+    )
     return response
 
 
@@ -570,6 +623,17 @@ def _message(error: Exception) -> str:
     if isinstance(error, LookupError):
         return "That folder no longer exists."
     return str(error)
+
+
+def _shared_line(title: str, text: str, url: str) -> str:
+    # Apps fill these differently: YouTube puts the link in text, Chrome
+    # sends the page title and url. Each piece is kept once.
+    parts: list[str] = []
+    for piece in (title, text, url):
+        cleaned = piece.strip()
+        if cleaned and not any(cleaned in existing for existing in parts):
+            parts.append(cleaned)
+    return "\n".join(parts)
 
 
 def _uploaded(upload: UploadFile | None) -> bytes | None:
