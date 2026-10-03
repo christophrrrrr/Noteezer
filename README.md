@@ -44,7 +44,7 @@ Without Gemini, times come only from the picker. With Gemini, a line that starts
 
 ## Left for later
 
-Lock-screen notifications need a second always-on process. This assignment forbids that, so delivery while the phone is locked waits until the app is split and deployed. Also out of scope: chat import, offline mode, sharing items with other people, and video files (a video link is understood from its title).
+Push notifications to the phone are not built (ADR-5). The in-process background task could send them, but a reminder would only arrive while the computer running Noteezer is on, so they wait for the always-on deployment in Assignment 2. Until then, due reminders are pinned at the top when the app is opened. Also out of scope: chat import, offline mode, sharing items with other people, and video files (a video link is understood from its title).
 
 ## Run
 
@@ -61,10 +61,27 @@ The process listens on `0.0.0.0` and port `8000`, or `PORT` if that variable is 
 
 Open `http://127.0.0.1:8000/register`, create an account, and save a line. A line that starts with `todo` or `buy` becomes a task, a URL becomes a link, and `remind` or the Reminder choice becomes a reminder that needs the date picker. Check Every day to repeat it, and set the date field only if it should stop. A reminder time that is already past is marked due and listed first. `#words` become tags.
 
+## Use it on your phone
+
+Noteezer installs as an app on Android (Chrome) and iPhone (Safari, Add to Home Screen). Installing and sharing need HTTPS, and the easiest private way to get it is [Tailscale](https://tailscale.com), which is free for personal use:
+
+1. Install Tailscale on the computer running Noteezer and on the phone, and sign in to both with the same account. In the Tailscale admin console, under DNS, turn on MagicDNS and HTTPS Certificates.
+2. Start Noteezer with `python app.py`, then in another terminal run:
+
+   ```
+   tailscale serve --bg 8000
+   ```
+
+   It prints an address like `https://your-computer.your-tailnet.ts.net`. Only your own devices can open it. `tailscale serve reset` stops it.
+3. Open that address on the phone and log in. In Chrome, open the menu and choose Install app (or Add to Home screen).
+4. On Android, Noteezer now appears in the share sheet. Sharing a YouTube video, a page, or a screenshot saves it to Unsorted, where it is sorted like any other line.
+
+The app is a manifest (`noteezer/static/manifest.webmanifest`) and a service worker (`noteezer/static/sw.js`). The worker caches only the styles, script, and icons, and shows an offline page when the server cannot be reached. Notes and images are never cached on the phone. The login cookie lasts 90 days, so the installed app stays signed in.
+
 Core logic tests, with coverage for the inbox, folder, sorting, link preview, Gemini, image, reminder, account, and kind rules modules. The tests never call Gemini or fetch real pages; they use fakes:
 
 ```
 pytest --cov=noteezer.classify --cov=noteezer.inbox --cov=noteezer.reminders --cov=noteezer.users --cov=noteezer.passwords --cov=noteezer.folders --cov=noteezer.sorting --cov=noteezer.links --cov=noteezer.gemini --cov=noteezer.images --cov-report=term-missing
 ```
 
-That run is 89 tests and 96% coverage on those modules.
+That run is 94 tests and 96% coverage on those modules.
