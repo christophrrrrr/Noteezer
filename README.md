@@ -44,7 +44,9 @@ Without Gemini, times come only from the picker. With Gemini, a line that starts
 
 ## Left for later
 
-Push notifications to the phone are not built (ADR-5). The in-process background task could send them, but a reminder would only arrive while the computer running Noteezer is on, so they wait for the always-on deployment in Assignment 2. Until then, due reminders are pinned at the top when the app is opened. Also out of scope: chat import, offline mode, sharing items with other people, and video files (a video link is understood from its title).
+**Running without the laptop is the biggest gap.** Noteezer works only while `python app.py` runs on the computer that hosts it, and the phone reaches it through Tailscale. When that computer is off or asleep, the phone app shows its offline page, nothing can be saved, and nothing is sorted. This assignment does not allow a real public deployment, so always-on hosting comes with Assignment 2, when the app is put in a container and deployed to Azure. Because the app is configured only through `PORT`, `DATA_DIR`, and the other variables above, that move needs no code changes.
+
+Push notifications to the phone are not built (ADR-5). The in-process background task could send them, but a reminder would only arrive while the computer running Noteezer is on, so they also wait for the always-on deployment. Until then, due reminders are pinned at the top when the app is opened. Also out of scope: chat import, offline mode, sharing items with other people, and video files (a video link is understood from its title).
 
 ## Run
 
