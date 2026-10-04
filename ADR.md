@@ -34,6 +34,8 @@ Updated: 2026-10-03. The route that marks a line done read the `items` table its
 
 Updated: 2026-10-03. Which folders a line is in is still written only by inbox (`set_folders`, `add_to_folder`, `file_unsorted_item`). Sorting owns `folder_suggestions` and `folder_checks`: when a folder is created, the worker runs `check_new_folders` and stores suggestions, and `accept_also` asks inbox to add the line.
 
+Updated: 2026-10-04. The 2026-10-03 note above went too far: no route runs SQL, but not every table is read only by its owner. Writes across a seam go through functions, with one exception: `record_reading` in `images.py` replaces the body "Screenshot" in `items` itself. Reads still cross with SQL joins: `sort_pending` and `check_new_folders` read `items`, `item_folders`, `reminders`, and `images` to find work, and `reminders`, `images`, and `links` join `items` to check the owner. These joins are what Assignment 2 has to replace, with calls between services or a `user_id` copied onto each owned table. `docs/diagrams.md` marks each crossing.
+
 ## [3]. How inbox rows relate to reminder rows
 
 Date: 2026-09-26
@@ -55,6 +57,8 @@ Updated: 2026-10-01. `images` uses `item_id` as its primary key, so a line has a
 
 Updated: 2026-10-03. A line can now be in several folders. `items.folder_id` was replaced by `item_folders (item_id, folder_id)`, with both keys `ON DELETE CASCADE`, so deleting a folder only removes its memberships, and a line with no membership is in Unsorted. This changed because a table tennis video was filed into Table Tennis, and later it also belonged in a new Cool videos folder; with one folder per line the user had to choose. Rejected: copying the line into each folder, because an edit or a done task would then have to be kept in sync. `folder_suggestions (item_id, folder_id)` holds "Also add to" suggestions from a new-folder check, and `folder_checks (folder_id)` queues those checks. Old databases are rebuilt once on startup, and every old `folder_id` becomes a row in `item_folders`.
 
+Updated: 2026-10-04. The diagram described in Consequences only covers the first four tables. The full database diagram, with all twelve tables from `schema.sql` and the module that writes each one, is in `docs/diagrams.md`.
+
 ## [4]. Testing approach
 
 Date: 2026-09-30
@@ -65,6 +69,8 @@ Alternatives considered: Mocking `sqlite3` was rejected because cascades, unique
 Consequences: 54 tests cover 96% of those modules. The background worker loop, the routes, and the templates are tested less: a broken route shows up in the `TestClient` tests or by hand, not in the coverage number. An engine that calls an outside API will be tested with a fake, so the tests never need a network connection or a key.
 
 Updated: 2026-10-03. The suite is now 94 tests at 96% of the domain modules, which now also include `links`, `gemini`, and `images`. Gemini, web pages, and the clock are always faked, so the tests never need a key, a network connection, or a particular day.
+
+Updated: 2026-10-04. After lines could be in several folders, the suite is 103 tests at 96% of the same ten modules. `test_multi_folders.py` checks that deleting one folder keeps the line in its other folders and that a new folder only suggests filed lines, never moves them. `test_db.py` checks that an old database's `folder_id` values become rows in `item_folders`.
 
 ## [5]. Reminders are not pushed to the phone
 

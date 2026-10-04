@@ -57,7 +57,21 @@ pip install -r requirements.txt
 python app.py
 ```
 
-The process listens on `0.0.0.0` and port `8000`, or `PORT` if that variable is set. The SQLite file is `data/noteezer.db`, or `$DATA_DIR/noteezer.db` if `DATA_DIR` is set. The session cookie is signed with `SESSION_SECRET`, which defaults to `dev-only-change-me` so the app still starts with no setup. `SORTER` picks the sorting engine: `auto` (the default) uses Gemini when `GEMINI_API_KEY` is set and the rules otherwise, `rules` never calls Gemini, and `gemini` asks for it. `GEMINI_MODEL` defaults to `gemini-3.5-flash-lite`. `GEMINI_IMAGE_MODEL` defaults to `gemini-3.8-flash` and is used only for lines with an image. `python app.py` also reads an optional `.env` file next to it, for example with `GEMINI_API_KEY=...`, and variables already set in the environment win. A free key comes from Google AI Studio. On the free tier Google may use the notes it sorts to improve its models.
+The process listens on `0.0.0.0` and needs no setup step: the database and its tables are created on the first start. Everything is configured with environment variables, and none is required:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `PORT` | `8000` | Port to listen on. |
+| `DATA_DIR` | `data` | Folder for the SQLite file, which is `$DATA_DIR/noteezer.db`. The folder is created if missing. |
+| `SESSION_SECRET` | `dev-only-change-me` | Signs the login cookie. Set it to a long random value anywhere but your own laptop. |
+| `GEMINI_API_KEY` | not set | Turns on Gemini sorting. Without it the rules sort and the app works the same otherwise. |
+| `SORTER` | `auto` | `auto` uses Gemini when a key is set and the rules otherwise, `rules` never calls Gemini, `gemini` asks for it. |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Model for text lines. |
+| `GEMINI_IMAGE_MODEL` | `gemini-3.8-flash` | Model for lines with an image. |
+
+`python app.py` also reads an optional `.env` file next to it, for example with `GEMINI_API_KEY=...`, and variables already set in the environment win. A free key comes from Google AI Studio. On the free tier Google may use the notes it sorts to improve its models.
+
+The architecture and database diagrams are in [docs/diagrams.md](docs/diagrams.md).
 
 Open `http://127.0.0.1:8000/register`, create an account, and save a line. A line that starts with `todo` or `buy` becomes a task, a URL becomes a link, and `remind` or the Reminder choice becomes a reminder that needs the date picker. Check Every day to repeat it, and set the date field only if it should stop. A reminder time that is already past is marked due and listed first. `#words` become tags.
 
