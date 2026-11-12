@@ -3,17 +3,17 @@ from pathlib import Path
 
 import pytest
 
-from noteezer.db import connect, init_db
-from noteezer.inbox import delete_item, item_kind, list_items, save_item, set_task_done, toggle_task, update_item
-from noteezer.reminders import complete, next_occurrence, snooze
-from noteezer.users import register_user
+from app.db import connect, init_db
+from app.inbox import delete_item, item_kind, list_items, save_item, set_task_done, toggle_task, update_item
+from app.reminders import complete, next_occurrence, snooze
+from app.users import register_user
 
 NOW = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
 START = datetime(2026, 9, 28, 15, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     return connection
 

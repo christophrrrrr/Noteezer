@@ -5,9 +5,9 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone, tzinfo
 
-from noteezer.images import Image
-from noteezer.links import TLS_CONTEXT
-from noteezer.sorting import FILE_AT, Candidate, FolderOption, NewFolder, Note, Part, RulesSorter, Suggestion
+from app.images import Image
+from app.links import TLS_CONTEXT
+from app.sorting import FILE_AT, Candidate, FolderOption, NewFolder, Note, Part, RulesSorter, Suggestion
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 # Flash-Lite missed dates in screenshots about half the time in testing;

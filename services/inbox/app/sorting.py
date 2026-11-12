@@ -7,10 +7,10 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Protocol
 
-from noteezer.classify import classify
-from noteezer.folders import FolderError, create_folder, find_folder, list_folders
-from noteezer.images import Image, readable_image, record_reading
-from noteezer.inbox import (
+from app.classify import classify
+from app.folders import FolderError, create_folder, find_folder, list_folders
+from app.images import Image, readable_image, record_reading
+from app.inbox import (
     add_to_folder,
     change_plain_note_kind,
     file_unsorted_item,
@@ -19,8 +19,8 @@ from noteezer.inbox import (
     split_item,
     undo_split,
 )
-from noteezer.links import LinkPreview, first_url, save_preview, stored_preview
-from noteezer.users import user_timezone
+from app.links import LinkPreview, first_url, save_preview, stored_preview
+from app.users import user_timezone
 
 FILE_AT = 0.8
 MAX_ATTEMPTS = 5
@@ -134,7 +134,7 @@ def sorter_from_env() -> Sorter:
     choice = os.environ.get("SORTER", "auto").strip().lower()
     has_key = bool(os.environ.get("GEMINI_API_KEY", "").strip())
     if choice in ("auto", "gemini") and has_key:
-        from noteezer.gemini import GeminiSorter
+        from app.gemini import GeminiSorter
 
         return GeminiSorter.from_env()
     if choice == "gemini":

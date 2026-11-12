@@ -6,9 +6,9 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from noteezer.classify import ClassificationError
-from noteezer.db import connect
-from noteezer.folders import (
+from app.classify import ClassificationError
+from app.db import connect
+from app.folders import (
     FolderError,
     create_folder,
     delete_folder,
@@ -16,7 +16,7 @@ from noteezer.folders import (
     move_folder,
     rename_folder,
 )
-from noteezer.inbox import (
+from app.inbox import (
     count_by_folder,
     count_items,
     delete_item,
@@ -27,11 +27,11 @@ from noteezer.inbox import (
     toggle_task,
     update_item,
 )
-from noteezer.reminders import complete, snooze
-from noteezer.sessions import COOKIE_NAME, read_user_id, sign_user_id
-from noteezer.images import MAX_BYTES, PLACEHOLDER, ImageError, attach_image, check_image, image_for, images_for
-from noteezer.links import previews_for
-from noteezer.sorting import (
+from app.reminders import complete, snooze
+from app.sessions import COOKIE_NAME, read_user_id, sign_user_id
+from app.images import MAX_BYTES, PLACEHOLDER, ImageError, attach_image, check_image, image_for, images_for
+from app.links import previews_for
+from app.sorting import (
     accept_also,
     accept_proposal,
     accept_reminder,
@@ -44,7 +44,7 @@ from noteezer.sorting import (
     results_for,
     undo_auto_split,
 )
-from noteezer.users import AccountError, authenticate, register_user, set_timezone, user_timezone
+from app.users import AccountError, authenticate, register_user, set_timezone, user_timezone
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
 STATIC = Path(__file__).with_name("static")

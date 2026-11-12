@@ -39,7 +39,7 @@ Without Gemini, times come only from the picker. With Gemini, a line that starts
 
 - One process, Python, FastAPI, server-rendered pages, SQLite.
 - Due reminders appear at the top when you open the app. Snooze and done are supported.
-- A dark page in the style of Notion. Folders are in a sidebar, which becomes a drawer on a phone. Notes run from oldest to newest like a chat, with the newest just above the capture bar and due reminders pinned on top. Styles and a small script are in `noteezer/static`. Every button is a normal form, so the app also works without the script.
+- A dark page in the style of Notion. Folders are in a sidebar, which becomes a drawer on a phone. Notes run from oldest to newest like a chat, with the newest just above the capture bar and due reminders pinned on top. Styles and a small script are in `services/inbox/app/static`. Every button is a normal form, so the app also works without the script.
 - Minimal accounts: register, log in, and log out with email and password. Not a third feature domain.
 
 ## Left for later
@@ -50,13 +50,14 @@ Push notifications to the phone are not built (ADR-5). The in-process background
 
 ## Run
 
-From the repository root:
+Noteezer is being split into two services (ADR-6). Until the reminders service exists, the whole app runs as the inbox service, from its folder:
 
 ```
+cd services\inbox
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-python app.py
+python -m app
 ```
 
 The process listens on `0.0.0.0` and needs no setup step: the database and its tables are created on the first start. Everything is configured with environment variables, and none is required:
@@ -71,7 +72,7 @@ The process listens on `0.0.0.0` and needs no setup step: the database and its t
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Model for text lines. |
 | `GEMINI_IMAGE_MODEL` | `gemini-3.8-flash` | Model for lines with an image. |
 
-`python app.py` also reads an optional `.env` file next to it, for example with `GEMINI_API_KEY=...`, and variables already set in the environment win. A free key comes from Google AI Studio. On the free tier Google may use the notes it sorts to improve its models.
+`python -m app` also reads an optional `.env` file in `services/inbox`, for example with `GEMINI_API_KEY=...`, and variables already set in the environment win. A free key comes from Google AI Studio. On the free tier Google may use the notes it sorts to improve its models.
 
 The architecture and database diagrams are in [docs/diagrams.md](docs/diagrams.md).
 
@@ -82,7 +83,7 @@ Open `http://127.0.0.1:8000/register`, create an account, and save a line. A lin
 Noteezer installs as an app on Android (Chrome) and iPhone (Safari, Add to Home Screen). Installing and sharing need HTTPS, and the easiest private way to get it is [Tailscale](https://tailscale.com), which is free for personal use:
 
 1. Install Tailscale on the computer running Noteezer and on the phone, and sign in to both with the same account. In the Tailscale admin console, under DNS, turn on MagicDNS and HTTPS Certificates.
-2. Start Noteezer with `python app.py`, then in another terminal run:
+2. Start Noteezer with `python -m app` in `services/inbox`, then in another terminal run:
 
    ```
    tailscale serve --bg 8000
@@ -92,12 +93,13 @@ Noteezer installs as an app on Android (Chrome) and iPhone (Safari, Add to Home 
 3. Open that address on the phone and log in. In Chrome, open the menu and choose Install app (or Add to Home screen).
 4. On Android, Noteezer now appears in the share sheet. Sharing a YouTube video, a page, or a screenshot saves it to Unsorted, where it is sorted like any other line.
 
-The app is a manifest (`noteezer/static/manifest.webmanifest`) and a service worker (`noteezer/static/sw.js`). The worker caches only the styles, script, and icons, and shows an offline page when the server cannot be reached. Notes and images are never cached on the phone. The login cookie lasts 90 days, so the installed app stays signed in.
+The app is a manifest (`services/inbox/app/static/manifest.webmanifest`) and a service worker (`services/inbox/app/static/sw.js`). The worker caches only the styles, script, and icons, and shows an offline page when the server cannot be reached. Notes and images are never cached on the phone. The login cookie lasts 90 days, so the installed app stays signed in.
 
 Core logic tests, with coverage for the inbox, folder, sorting, link preview, Gemini, image, reminder, account, and kind rules modules. The tests never call Gemini or fetch real pages; they use fakes:
 
 ```
-pytest --cov=noteezer.classify --cov=noteezer.inbox --cov=noteezer.reminders --cov=noteezer.users --cov=noteezer.passwords --cov=noteezer.folders --cov=noteezer.sorting --cov=noteezer.links --cov=noteezer.gemini --cov=noteezer.images --cov-report=term-missing
+cd services\inbox
+pytest --cov=app.classify --cov=app.inbox --cov=app.reminders --cov=app.users --cov=app.passwords --cov=app.folders --cov=app.sorting --cov=app.links --cov=app.gemini --cov=app.images --cov-report=term-missing
 ```
 
 That run is 103 tests and 96% coverage on those modules.

@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from noteezer.db import connect, init_db
-from noteezer.folders import create_folder, list_folders
-from noteezer.gemini import GeminiSorter, build_prompt, parse_answer
-from noteezer.inbox import list_items, save_item
-from noteezer.links import LinkPreview
-from noteezer.sorting import (
+from app.db import connect, init_db
+from app.folders import create_folder, list_folders
+from app.gemini import GeminiSorter, build_prompt, parse_answer
+from app.inbox import list_items, save_item
+from app.links import LinkPreview
+from app.sorting import (
     FolderOption,
     NewFolder,
     Note,
@@ -21,7 +21,7 @@ from noteezer.sorting import (
     sort_pending,
     sorter_from_env,
 )
-from noteezer.users import register_user
+from app.users import register_user
 
 NOW = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
 PROJECTS = FolderOption(1, "Projects", "Projects")
@@ -124,7 +124,7 @@ def test_calls_are_spaced_out_for_the_free_tier() -> None:
 
 
 def test_a_proposed_folder_is_created_when_accepted(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     owner = register_user(connection, "a@example.com", "password1", NOW)
     projects = create_folder(connection, owner, "Projects", NOW)

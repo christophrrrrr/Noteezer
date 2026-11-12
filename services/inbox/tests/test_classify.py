@@ -1,6 +1,6 @@
 import pytest
 
-from noteezer.classify import ClassificationError, classify
+from app.classify import ClassificationError, classify
 
 
 def test_plain_line_is_a_note() -> None:

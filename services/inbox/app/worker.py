@@ -2,9 +2,9 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from noteezer.db import connect
-from noteezer.links import fetch_preview
-from noteezer.sorting import Sorter, check_new_folders, sort_pending
+from app.db import connect
+from app.links import fetch_preview
+from app.sorting import Sorter, check_new_folders, sort_pending
 
 log = logging.getLogger(__name__)
 

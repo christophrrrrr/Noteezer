@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from noteezer.db import connect, init_db
+from app.db import connect, init_db
 
 
 def _tables(connection: sqlite3.Connection) -> set[str]:
@@ -14,7 +14,7 @@ def _tables(connection: sqlite3.Connection) -> set[str]:
 
 
 def test_init_creates_every_table(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     assert _tables(connection) == {
         "users",
@@ -34,7 +34,7 @@ def test_init_creates_every_table(tmp_path: Path) -> None:
 
 
 def test_init_can_run_twice(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     init_db(connection)
     assert "items" in _tables(connection)
@@ -42,7 +42,7 @@ def test_init_can_run_twice(tmp_path: Path) -> None:
 
 
 def test_email_is_unique(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     connection.execute(
         "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
@@ -57,7 +57,7 @@ def test_email_is_unique(tmp_path: Path) -> None:
 
 
 def test_note_cannot_be_marked_done(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     connection.execute(
         "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
@@ -74,7 +74,7 @@ def test_note_cannot_be_marked_done(tmp_path: Path) -> None:
 
 
 def test_one_reminder_row_per_item(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     connection.execute(
         "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
@@ -103,7 +103,7 @@ def test_one_reminder_row_per_item(tmp_path: Path) -> None:
 
 
 def test_tag_name_is_unique_per_user_only(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     connection.execute(
         "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
@@ -121,7 +121,7 @@ def test_tag_name_is_unique_per_user_only(tmp_path: Path) -> None:
 
 
 def test_deleting_an_item_removes_its_reminder(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     connection.execute(
         "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
@@ -172,7 +172,7 @@ INSERT INTO reminders VALUES (1, '2026-09-27T15:00:00Z', 'scheduled', NULL);
 
 
 def test_old_database_gets_folders_and_keeps_its_rows(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     connection.executescript(OLD_ITEMS)
     init_db(connection)
 
@@ -220,7 +220,7 @@ INSERT INTO items VALUES (2, 1, NULL, 'loose thought', 'note', 0, '2026-10-01T00
 
 
 def test_a_one_folder_database_moves_each_folder_into_item_folders(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     connection.executescript(ONE_FOLDER_ITEMS)
     init_db(connection)
     init_db(connection)

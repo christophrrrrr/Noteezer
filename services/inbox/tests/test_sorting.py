@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from noteezer.db import connect, init_db
-from noteezer.folders import create_folder, delete_folder
-from noteezer.inbox import list_items, move_item, save_item
-from noteezer.sorting import (
+from app.db import connect, init_db
+from app.folders import create_folder, delete_folder
+from app.inbox import list_items, move_item, save_item
+from app.sorting import (
     MAX_ATTEMPTS,
     FolderOption,
     Note,
@@ -18,7 +18,7 @@ from noteezer.sorting import (
     sort_pending,
     sorter_from_env,
 )
-from noteezer.users import register_user
+from app.users import register_user
 
 NOW = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
 
@@ -30,7 +30,7 @@ FOLDERS = [PROJECTS, GAME, MAPS, WATCH]
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     return connection
 

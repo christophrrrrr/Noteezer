@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from noteezer.db import connect, init_db
-from noteezer.folders import create_folder
-from noteezer.gemini import GeminiSorter, build_prompt, parse_answer
-from noteezer.images import (
+from app.db import connect, init_db
+from app.folders import create_folder
+from app.gemini import GeminiSorter, build_prompt, parse_answer
+from app.images import (
     MAX_BYTES,
     PLACEHOLDER,
     ImageError,
@@ -18,10 +18,10 @@ from noteezer.images import (
     images_for,
     readable_image,
 )
-from noteezer.inbox import list_items, save_item
-from noteezer.main import create_app
-from noteezer.sorting import FolderOption, Note, Part, Suggestion, results_for, sort_pending
-from noteezer.users import register_user
+from app.inbox import list_items, save_item
+from app.main import create_app
+from app.sorting import FolderOption, Note, Part, Suggestion, results_for, sort_pending
+from app.users import register_user
 
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
@@ -29,7 +29,7 @@ JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     return connection
 
@@ -139,7 +139,7 @@ def test_gemini_gets_the_image_and_returns_a_title_and_its_text() -> None:
     folders = [FolderOption(1, "Climbing", "Climbing")]
     assert "Image: attached" not in build_prompt(Note(PLACEHOLDER), folders)
 
-    from noteezer.images import Image
+    from app.images import Image
 
     picture = Image(PNG, "image/png")
     seen = []

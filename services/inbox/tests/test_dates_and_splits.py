@@ -4,10 +4,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from noteezer.db import connect, init_db
-from noteezer.folders import create_folder
-from noteezer.inbox import list_items, save_item, split_item
-from noteezer.sorting import (
+from app.db import connect, init_db
+from app.folders import create_folder
+from app.inbox import list_items, save_item, split_item
+from app.sorting import (
     Part,
     Suggestion,
     accept_reminder,
@@ -17,14 +17,14 @@ from noteezer.sorting import (
     sort_pending,
     undo_auto_split,
 )
-from noteezer.users import register_user, set_timezone, user_timezone
+from app.users import register_user, set_timezone, user_timezone
 
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
 SATURDAY_3PM = datetime(2026, 10, 3, 13, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     return connection
 
@@ -177,7 +177,7 @@ def test_editing_a_line_into_a_timeless_reminder_reads_it_again(tmp_path: Path) 
     sort_pending(connection, Answer(Suggestion(None, 0.0)), NOW)
     assert resort_if_waiting(connection, owner, item_id) is False
 
-    from noteezer.inbox import update_item
+    from app.inbox import update_item
 
     update_item(connection, owner, item_id, "remind call mom saturday 3pm", None, NOW)
     assert resort_if_waiting(connection, owner, item_id) is True

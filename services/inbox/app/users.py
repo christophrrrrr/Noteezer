@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from noteezer.passwords import hash_password, verify_password
+from app.passwords import hash_password, verify_password
 
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 

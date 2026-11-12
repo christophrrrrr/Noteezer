@@ -1,9 +1,9 @@
 import sqlite3
 from datetime import date, datetime, timezone, tzinfo
 
-from noteezer.classify import URL_PATTERN, ClassificationError, classify
-from noteezer.folders import require_folder
-from noteezer.reminders import refresh, schedule
+from app.classify import URL_PATTERN, ClassificationError, classify
+from app.folders import require_folder
+from app.reminders import refresh, schedule
 
 
 def save_item(

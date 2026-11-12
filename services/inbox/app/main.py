@@ -6,10 +6,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from noteezer.db import connect, init_db
-from noteezer.sorting import sorter_from_env
-from noteezer.web import register_routes
-from noteezer.worker import SortWorker
+from app.db import connect, init_db
+from app.sorting import sorter_from_env
+from app.web import register_routes
+from app.worker import SortWorker
 
 
 @asynccontextmanager
