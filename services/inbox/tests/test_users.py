@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from noteezer.db import connect, init_db
-from noteezer.passwords import hash_password, verify_password
-from noteezer.sessions import read_user_id, sign_user_id
-from noteezer.users import AccountError, authenticate, register_user
+from app.db import connect, init_db
+from app.passwords import hash_password, verify_password
+from app.sessions import read_user_id, sign_user_id
+from app.users import AccountError, authenticate, register_user
 
 NOW = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
 
@@ -18,7 +18,7 @@ def test_password_hash_verifies_and_rejects_the_wrong_password() -> None:
 
 
 def test_register_and_login_use_the_email(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     user_id = register_user(connection, "A@Example.com", "password1", NOW)
     assert authenticate(connection, "a@example.com", "password1") == user_id
@@ -29,7 +29,7 @@ def test_register_and_login_use_the_email(tmp_path: Path) -> None:
 
 
 def test_register_rejects_a_bad_email_and_a_short_password(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     with pytest.raises(AccountError):
         register_user(connection, "not-an-email", "password1", NOW)

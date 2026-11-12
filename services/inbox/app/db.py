@@ -7,7 +7,7 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 def database_path() -> Path:
     data_dir = Path(os.environ.get("DATA_DIR", "data"))
-    return data_dir / "noteezer.db"
+    return data_dir / "app.db"
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:

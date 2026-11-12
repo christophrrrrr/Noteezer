@@ -3,11 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from noteezer.classify import ClassificationError
-from noteezer.db import connect, init_db
-from noteezer.inbox import list_items, save_item
-from noteezer.reminders import initial_status, schedule
-from noteezer.users import register_user
+from app.classify import ClassificationError
+from app.db import connect, init_db
+from app.inbox import list_items, save_item
+from app.reminders import initial_status, schedule
+from app.users import register_user
 
 NOW = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
 PAST = datetime(2026, 9, 27, 11, 0, tzinfo=timezone.utc)
@@ -15,7 +15,7 @@ FUTURE = datetime(2026, 9, 27, 15, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     return connection
 

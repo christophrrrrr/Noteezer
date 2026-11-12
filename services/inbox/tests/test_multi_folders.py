@@ -5,12 +5,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from noteezer.db import connect, init_db
-from noteezer.folders import create_folder, delete_folder
-from noteezer.gemini import GeminiSorter, parse_answer
-from noteezer.inbox import add_to_folder, count_by_folder, count_items, list_items, save_item, set_folders
-from noteezer.main import create_app
-from noteezer.sorting import (
+from app.db import connect, init_db
+from app.folders import create_folder, delete_folder
+from app.gemini import GeminiSorter, parse_answer
+from app.inbox import add_to_folder, count_by_folder, count_items, list_items, save_item, set_folders
+from app.main import create_app
+from app.sorting import (
     Candidate,
     FolderOption,
     Note,
@@ -23,13 +23,13 @@ from noteezer.sorting import (
     request_folder_check,
     sort_pending,
 )
-from noteezer.users import register_user
+from app.users import register_user
 
 NOW = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     return connection
 

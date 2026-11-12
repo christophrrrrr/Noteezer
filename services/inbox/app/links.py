@@ -10,7 +10,7 @@ from urllib.parse import urlencode, urljoin, urlsplit
 
 import httpx
 
-from noteezer.classify import URL_PATTERN
+from app.classify import URL_PATTERN
 
 MAX_BYTES = 512_000
 MAX_REDIRECTS = 3

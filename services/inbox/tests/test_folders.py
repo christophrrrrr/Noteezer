@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from noteezer.db import connect, init_db
-from noteezer.folders import (
+from app.db import connect, init_db
+from app.folders import (
     FolderError,
     create_folder,
     delete_folder,
@@ -13,14 +13,14 @@ from noteezer.folders import (
     move_folder,
     rename_folder,
 )
-from noteezer.inbox import count_by_folder, list_items, move_item, save_item
-from noteezer.users import register_user
+from app.inbox import count_by_folder, list_items, move_item, save_item
+from app.users import register_user
 
 NOW = datetime(2026, 9, 29, 12, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     return connection
 

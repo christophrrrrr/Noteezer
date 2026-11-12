@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from noteezer.main import create_app
+from app.main import create_app
 
 
 def test_register_then_save_shows_the_sorted_line(tmp_path: Path, monkeypatch) -> None:
@@ -84,7 +84,7 @@ def test_the_date_picker_is_read_in_the_browser_timezone(tmp_path: Path, monkeyp
         page = client.get("/inbox")
         assert "Sat 5 Dec, 15:00" in page.text
 
-        from noteezer.db import connect
+        from app.db import connect
 
         connection = connect()
         stored = connection.execute("SELECT remind_at FROM reminders").fetchone()["remind_at"]

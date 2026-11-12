@@ -4,13 +4,13 @@ from pathlib import Path
 import httpx
 import pytest
 
-from noteezer import links
-from noteezer.db import connect, init_db
-from noteezer.folders import create_folder
-from noteezer.inbox import save_item
-from noteezer.links import LinkPreview, fetch_preview, first_url, previews_for, stored_preview
-from noteezer.sorting import RulesSorter, results_for, sort_pending
-from noteezer.users import register_user
+from app import links
+from app.db import connect, init_db
+from app.folders import create_folder
+from app.inbox import save_item
+from app.links import LinkPreview, fetch_preview, first_url, previews_for, stored_preview
+from app.sorting import RulesSorter, results_for, sort_pending
+from app.users import register_user
 
 NOW = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
 
@@ -98,7 +98,7 @@ def test_unreadable_links_give_no_preview(web, monkeypatch) -> None:
 
 
 def test_sorting_fetches_a_link_once_and_matches_its_title(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "noteezer.db")
+    connection = connect(tmp_path / "app.db")
     init_db(connection)
     owner = register_user(connection, "a@example.com", "password1", NOW)
     climbing = create_folder(connection, owner, "Climbing", NOW)
