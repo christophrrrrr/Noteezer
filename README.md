@@ -52,14 +52,15 @@ Push notifications to the phone are not built (ADR-5). The in-process background
 
 Noteezer is being split into two services (ADR-6). Until the reminders service exists, the whole app runs as the inbox service.
 
-It needs a SQL Server. Locally that is a container (Docker Desktop has to be running). The password below is only for this local container:
+It needs a SQL Server. Locally that is a container (Docker Desktop has to be running). Choose a password of your own (at least 8 characters with upper case, lower case, and digits; SQL Server refuses weaker ones) and never commit it. In PowerShell:
 
 ```
-docker run -d --name noteezer-sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=Noteezer_dev1 -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
-docker exec noteezer-sql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Noteezer_dev1 -Q "CREATE DATABASE noteezer_inbox; ALTER DATABASE noteezer_inbox SET READ_COMMITTED_SNAPSHOT ON"
+$env:DB_PASSWORD = "<your password>"
+docker run -d --name noteezer-sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=$env:DB_PASSWORD -p 127.0.0.1:1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+docker exec noteezer-sql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $env:DB_PASSWORD -Q "CREATE DATABASE noteezer_inbox; ALTER DATABASE noteezer_inbox SET READ_COMMITTED_SNAPSHOT ON"
 ```
 
-Then, from the service's folder, with `DB_PASSWORD=Noteezer_dev1` in `services/inbox/.env`:
+The container only listens on this computer (`127.0.0.1`). Put the same password in `services/inbox/.env` as `DB_PASSWORD=...`; that file is git-ignored. Then, from the service's folder:
 
 ```
 cd services\inbox
@@ -108,7 +109,7 @@ Noteezer installs as an app on Android (Chrome) and iPhone (Safari, Add to Home 
 
 The app is a manifest (`services/inbox/app/static/manifest.webmanifest`) and a service worker (`services/inbox/app/static/sw.js`). The worker caches only the styles, script, and icons, and shows an offline page when the server cannot be reached. Notes and images are never cached on the phone. The login cookie lasts 90 days, so the installed app stays signed in.
 
-Core logic tests, with coverage for the inbox, folder, sorting, link preview, Gemini, image, reminder, account, kind rules, database, and migration modules. The tests never call Gemini or fetch real pages; they use fakes. They do run against a real SQL Server, the container above: each run creates a fresh `noteezer_inbox_test` database, migrates it, empties it before every test, and drops it at the end. `DB_SERVER`, `DB_PORT`, `DB_USER`, and `DB_PASSWORD` point at the server (`DB_PASSWORD` defaults to the local container's):
+Core logic tests, with coverage for the inbox, folder, sorting, link preview, Gemini, image, reminder, account, kind rules, database, and migration modules. The tests never call Gemini or fetch real pages; they use fakes. They do run against a real SQL Server, the container above: each run creates a fresh `noteezer_inbox_test` database, migrates it, empties it before every test, and drops it at the end. `DB_SERVER`, `DB_PORT`, `DB_USER`, and `DB_PASSWORD` point at the server, read from the environment or `services/inbox/.env`; without `DB_PASSWORD` the run stops with a message:
 
 ```
 cd services\inbox

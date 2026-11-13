@@ -1,17 +1,22 @@
 """Tests run against a real SQL Server, the same engine as Azure SQL.
 
 Start one locally with the docker run command in the README. The DB_SERVER,
-DB_PORT, DB_USER, and DB_PASSWORD variables point at it (defaults match that
-command). A fresh database named TEST_DB_NAME is created for each test run,
+DB_PORT, DB_USER, and DB_PASSWORD variables point at it, from the environment
+or from services/inbox/.env (never from the repo: no password is written in
+code). A fresh database named TEST_DB_NAME is created for each test run,
 migrated once, and emptied before every test, so ids start at 1 each time.
 """
 
 import os
+from pathlib import Path
 
 import pymssql
 import pytest
+from dotenv import load_dotenv
 
-os.environ.setdefault("DB_PASSWORD", "Noteezer_dev1")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+if not os.environ.get("DB_PASSWORD"):
+    pytest.exit("Set DB_PASSWORD (in the environment or services/inbox/.env) to the SQL Server password.", returncode=2)
 os.environ["DB_NAME"] = os.environ.get("TEST_DB_NAME", "noteezer_inbox_test")
 
 from app.db import connect  # noqa: E402  (needs the variables above)
