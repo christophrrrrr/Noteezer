@@ -11,7 +11,6 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SESSION_SECRET", "test-secret")
     with TestClient(create_app()) as test_client:
         yield test_client

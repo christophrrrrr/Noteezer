@@ -1,5 +1,6 @@
-import sqlite3
 from datetime import datetime, timezone
+
+from app.db import Connection, IntegrityError, Row
 
 MAX_NAME_LENGTH = 60
 
@@ -9,7 +10,7 @@ class FolderError(Exception):
 
 
 def create_folder(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     name: str,
     now: datetime,
@@ -19,18 +20,18 @@ def create_folder(
     if parent_id is not None:
         require_folder(connection, user_id, parent_id)
     try:
-        cursor = connection.execute(
-            "INSERT INTO folders (user_id, parent_id, name, created_at) VALUES (?, ?, ?, ?)",
+        row = connection.execute(
+            "INSERT INTO folders (user_id, parent_id, name, created_at) OUTPUT INSERTED.id VALUES (?, ?, ?, ?)",
             (user_id, parent_id, cleaned, now.astimezone(timezone.utc).isoformat()),
-        )
-    except sqlite3.IntegrityError as error:
+        ).fetchone()
+    except IntegrityError as error:
         connection.rollback()
         raise FolderError(f"There is already a folder called {cleaned} here.") from error
     connection.commit()
-    return int(cursor.lastrowid)
+    return int(row["id"])
 
 
-def rename_folder(connection: sqlite3.Connection, user_id: int, folder_id: int, name: str) -> None:
+def rename_folder(connection: Connection, user_id: int, folder_id: int, name: str) -> None:
     cleaned = _clean_name(name)
     require_folder(connection, user_id, folder_id)
     try:
@@ -38,14 +39,14 @@ def rename_folder(connection: sqlite3.Connection, user_id: int, folder_id: int, 
             "UPDATE folders SET name = ? WHERE id = ? AND user_id = ?",
             (cleaned, folder_id, user_id),
         )
-    except sqlite3.IntegrityError as error:
+    except IntegrityError as error:
         connection.rollback()
         raise FolderError(f"There is already a folder called {cleaned} here.") from error
     connection.commit()
 
 
 def move_folder(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     folder_id: int,
     parent_id: int | None,
@@ -60,26 +61,32 @@ def move_folder(
             "UPDATE folders SET parent_id = ? WHERE id = ? AND user_id = ?",
             (parent_id, folder_id, user_id),
         )
-    except sqlite3.IntegrityError as error:
+    except IntegrityError as error:
         connection.rollback()
         raise FolderError("A folder with that name is already there.") from error
     connection.commit()
 
 
-def delete_folder(connection: sqlite3.Connection, user_id: int, folder_id: int) -> None:
-    # Subfolders go with it (ON DELETE CASCADE). Items are never deleted with a
-    # folder: only their item_folders rows go, so a line that was in no other
-    # folder lands in Unsorted.
-    cursor = connection.execute(
-        "DELETE FROM folders WHERE id = ? AND user_id = ?",
-        (folder_id, user_id),
-    )
-    if cursor.rowcount == 0:
+def delete_folder(connection: Connection, user_id: int, folder_id: int) -> None:
+    # Subfolders go with it. Items are never deleted with a folder: only their
+    # item_folders rows go (ON DELETE CASCADE), so a line that was in no other
+    # folder lands in Unsorted. SQL Server refuses a cascade from a table to
+    # itself, so the subtree is collected here and deleted in one statement,
+    # and new-folder proposals that pointed into it are cleared first.
+    subtree = descendant_ids(connection, user_id, folder_id)
+    if not subtree:
         raise LookupError("folder not found")
+    placeholders = ",".join("?" for _ in subtree)
+    ids = tuple(subtree)
+    connection.execute(
+        f"UPDATE sort_results SET proposed_parent_id = NULL WHERE proposed_parent_id IN ({placeholders})",
+        ids,
+    )
+    connection.execute(f"DELETE FROM folders WHERE id IN ({placeholders})", ids)
     connection.commit()
 
 
-def require_folder(connection: sqlite3.Connection, user_id: int, folder_id: int) -> None:
+def require_folder(connection: Connection, user_id: int, folder_id: int) -> None:
     row = connection.execute(
         "SELECT 1 FROM folders WHERE id = ? AND user_id = ?",
         (folder_id, user_id),
@@ -89,7 +96,7 @@ def require_folder(connection: sqlite3.Connection, user_id: int, folder_id: int)
 
 
 def find_folder(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     name: str,
     parent_id: int | None,
@@ -97,17 +104,17 @@ def find_folder(
     row = connection.execute(
         """
         SELECT id FROM folders
-        WHERE user_id = ? AND IFNULL(parent_id, 0) = IFNULL(?, 0) AND name = ? COLLATE NOCASE
+        WHERE user_id = ? AND parent_key = ISNULL(?, 0) AND name = ?
         """,
         (user_id, parent_id, " ".join(name.split())),
     ).fetchone()
     return None if row is None else int(row["id"])
 
 
-def descendant_ids(connection: sqlite3.Connection, user_id: int, folder_id: int) -> set[int]:
+def descendant_ids(connection: Connection, user_id: int, folder_id: int) -> set[int]:
     rows = connection.execute(
         """
-        WITH RECURSIVE subtree(id) AS (
+        WITH subtree(id) AS (
             SELECT id FROM folders WHERE id = ? AND user_id = ?
             UNION ALL
             SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id
@@ -119,12 +126,12 @@ def descendant_ids(connection: sqlite3.Connection, user_id: int, folder_id: int)
     return {int(row["id"]) for row in rows}
 
 
-def list_folders(connection: sqlite3.Connection, user_id: int) -> list[dict]:
+def list_folders(connection: Connection, user_id: int) -> list[dict]:
     rows = connection.execute(
         "SELECT id, parent_id, name FROM folders WHERE user_id = ?",
         (user_id,),
     ).fetchall()
-    children: dict[int | None, list[sqlite3.Row]] = {}
+    children: dict[int | None, list[Row]] = {}
     for row in rows:
         children.setdefault(row["parent_id"], []).append(row)
     for siblings in children.values():

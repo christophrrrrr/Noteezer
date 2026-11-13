@@ -1,8 +1,8 @@
 import re
-import sqlite3
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.db import Connection, IntegrityError
 from app.passwords import hash_password, verify_password
 
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -19,22 +19,23 @@ def normalize_email(email: str) -> str:
     return cleaned
 
 
-def register_user(connection: sqlite3.Connection, email: str, password: str, now: datetime) -> int:
+def register_user(connection: Connection, email: str, password: str, now: datetime) -> int:
     cleaned = normalize_email(email)
     if len(password) < 8:
         raise AccountError("Use at least 8 characters for the password.")
     try:
-        cursor = connection.execute(
-            "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
+        row = connection.execute(
+            "INSERT INTO users (email, password_hash, created_at) OUTPUT INSERTED.id VALUES (?, ?, ?)",
             (cleaned, hash_password(password), _iso(now)),
-        )
-    except sqlite3.IntegrityError as error:
+        ).fetchone()
+    except IntegrityError as error:
+        connection.rollback()
         raise AccountError("An account with that email already exists.") from error
     connection.commit()
-    return int(cursor.lastrowid)
+    return int(row["id"])
 
 
-def authenticate(connection: sqlite3.Connection, email: str, password: str) -> int | None:
+def authenticate(connection: Connection, email: str, password: str) -> int | None:
     try:
         cleaned = normalize_email(email)
     except AccountError:
@@ -48,7 +49,7 @@ def authenticate(connection: sqlite3.Connection, email: str, password: str) -> i
     return int(row["id"])
 
 
-def set_timezone(connection: sqlite3.Connection, user_id: int, name: str) -> bool:
+def set_timezone(connection: Connection, user_id: int, name: str) -> bool:
     # The browser sends its IANA zone name, like Europe/Madrid. Anything that is
     # not a known zone is ignored, so a bad value cannot break reminders.
     cleaned = name.strip()
@@ -57,14 +58,14 @@ def set_timezone(connection: sqlite3.Connection, user_id: int, name: str) -> boo
     except (ZoneInfoNotFoundError, ValueError):
         return False
     connection.execute(
-        "UPDATE users SET timezone = ? WHERE id = ? AND IFNULL(timezone, '') != ?",
+        "UPDATE users SET timezone = ? WHERE id = ? AND ISNULL(timezone, '') != ?",
         (cleaned, user_id, cleaned),
     )
     connection.commit()
     return True
 
 
-def user_timezone(connection: sqlite3.Connection, user_id: int) -> ZoneInfo:
+def user_timezone(connection: Connection, user_id: int) -> ZoneInfo:
     row = connection.execute("SELECT timezone FROM users WHERE id = ?", (user_id,)).fetchone()
     try:
         return ZoneInfo(row["timezone"]) if row is not None and row["timezone"] else ZoneInfo("UTC")

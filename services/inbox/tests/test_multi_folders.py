@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db import connect, init_db
+from app.db import connect
 from app.folders import create_folder, delete_folder
 from app.gemini import GeminiSorter, parse_answer
 from app.inbox import add_to_folder, count_by_folder, count_items, list_items, save_item, set_folders
@@ -29,8 +29,7 @@ NOW = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "app.db")
-    init_db(connection)
+    connection = connect()
     return connection
 
 
@@ -194,7 +193,6 @@ def test_the_engines_match_a_new_folder() -> None:
 
 
 def test_folders_are_ticked_and_suggested_through_the_pages(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SESSION_SECRET", "test-secret")
     with TestClient(create_app()) as client:
         client.post("/register", data={"email": "a@example.com", "password": "password1"})

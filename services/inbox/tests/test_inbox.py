@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.classify import ClassificationError
-from app.db import connect, init_db
+from app.db import connect
 from app.inbox import list_items, save_item
 from app.reminders import initial_status, schedule
 from app.users import register_user
@@ -15,8 +15,7 @@ FUTURE = datetime(2026, 9, 27, 15, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "app.db")
-    init_db(connection)
+    connection = connect()
     return connection
 
 

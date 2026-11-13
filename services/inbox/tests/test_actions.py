@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.db import connect, init_db
+from app.db import connect
 from app.inbox import delete_item, item_kind, list_items, save_item, set_task_done, toggle_task, update_item
 from app.reminders import complete, next_occurrence, snooze
 from app.users import register_user
@@ -13,8 +13,7 @@ START = datetime(2026, 9, 28, 15, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "app.db")
-    init_db(connection)
+    connection = connect()
     return connection
 
 

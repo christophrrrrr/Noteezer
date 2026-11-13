@@ -1,13 +1,13 @@
 import logging
 import os
 import re
-import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Protocol
 
 from app.classify import classify
+from app.db import Connection, Row
 from app.folders import FolderError, create_folder, find_folder, list_folders
 from app.images import Image, readable_image, record_reading
 from app.inbox import (
@@ -145,7 +145,7 @@ def sorter_from_env() -> Sorter:
 
 
 def sort_pending(
-    connection: sqlite3.Connection,
+    connection: Connection,
     sorter: Sorter,
     now: datetime,
     limit: int = 20,
@@ -158,8 +158,8 @@ def sort_pending(
     # fetch_preview is passed by the worker; without it no link is fetched.
     rows = connection.execute(
         """
-        SELECT i.id, i.user_id, i.body, i.kind, i.split_from, r.attempts,
-               EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id) AS filed
+        SELECT TOP (?) i.id, i.user_id, i.body, i.kind, i.split_from, r.attempts,
+               CASE WHEN EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id) THEN 1 ELSE 0 END AS filed
         FROM items i
         LEFT JOIN sort_results r ON r.item_id = i.id
         WHERE i.hidden = 0
@@ -171,9 +171,8 @@ def sort_pending(
             OR EXISTS (SELECT 1 FROM images g WHERE g.item_id = i.id AND g.ai_allowed = 1 AND g.read_at IS NULL)
           )
         ORDER BY i.id
-        LIMIT ?
         """,
-        (_iso(now), limit),
+        (limit, _iso(now)),
     ).fetchall()
     options_by_user: dict[int, list[FolderOption]] = {}
     zones: dict[int, tzinfo] = {}
@@ -212,7 +211,7 @@ def sort_pending(
     return len(rows)
 
 
-def accept_suggestion(connection: sqlite3.Connection, user_id: int, item_id: int) -> int:
+def accept_suggestion(connection: Connection, user_id: int, item_id: int) -> int:
     row = connection.execute(
         """
         SELECT r.folder_id
@@ -231,7 +230,7 @@ def accept_suggestion(connection: sqlite3.Connection, user_id: int, item_id: int
     return folder_id
 
 
-def accept_proposal(connection: sqlite3.Connection, user_id: int, item_id: int, now: datetime) -> int:
+def accept_proposal(connection: Connection, user_id: int, item_id: int, now: datetime) -> int:
     row = connection.execute(
         """
         SELECT r.proposed_name, r.proposed_parent_id
@@ -260,7 +259,7 @@ def accept_proposal(connection: sqlite3.Connection, user_id: int, item_id: int, 
     return folder_id
 
 
-def accept_reminder(connection: sqlite3.Connection, user_id: int, item_id: int, now: datetime) -> datetime:
+def accept_reminder(connection: Connection, user_id: int, item_id: int, now: datetime) -> datetime:
     row = connection.execute(
         """
         SELECT r.suggested_remind_at
@@ -279,7 +278,7 @@ def accept_reminder(connection: sqlite3.Connection, user_id: int, item_id: int, 
     return remind_at
 
 
-def undo_auto_split(connection: sqlite3.Connection, user_id: int, item_id: int) -> int:
+def undo_auto_split(connection: Connection, user_id: int, item_id: int) -> int:
     # The original comes back as one line and is marked as decided, so a new
     # folder does not send it to the sorter again and split it a second time.
     original = undo_split(connection, user_id, item_id)
@@ -288,20 +287,23 @@ def undo_auto_split(connection: sqlite3.Connection, user_id: int, item_id: int) 
     return original
 
 
-def request_folder_check(connection: sqlite3.Connection, folder_id: int, now: datetime) -> None:
+def request_folder_check(connection: Connection, folder_id: int, now: datetime) -> None:
     # Queued when a folder is created, so the worker can look through lines
     # that are already filed and suggest the ones that also belong here.
     connection.execute(
         """
-        INSERT INTO folder_checks (folder_id, requested_at) VALUES (?, ?)
-        ON CONFLICT(folder_id) DO UPDATE SET requested_at = excluded.requested_at, checked_at = NULL, attempts = 0
+        MERGE folder_checks WITH (HOLDLOCK) AS c
+        USING (SELECT ? AS folder_id, ? AS requested_at) AS s
+        ON c.folder_id = s.folder_id
+        WHEN MATCHED THEN UPDATE SET requested_at = s.requested_at, checked_at = NULL, attempts = 0
+        WHEN NOT MATCHED THEN INSERT (folder_id, requested_at) VALUES (s.folder_id, s.requested_at);
         """,
         (folder_id, _iso(now)),
     )
     connection.commit()
 
 
-def check_new_folders(connection: sqlite3.Connection, sorter: Sorter, now: datetime, limit: int = 1) -> int:
+def check_new_folders(connection: Connection, sorter: Sorter, now: datetime, limit: int = 1) -> int:
     """Suggests already filed lines for a newly created folder.
 
     One engine call per folder reviews up to CHECK_CANDIDATES recent lines that
@@ -310,11 +312,10 @@ def check_new_folders(connection: sqlite3.Connection, sorter: Sorter, now: datet
     """
     checks = connection.execute(
         """
-        SELECT c.folder_id, c.attempts, f.user_id
+        SELECT TOP (?) c.folder_id, c.attempts, f.user_id
         FROM folder_checks c JOIN folders f ON f.id = c.folder_id
         WHERE c.checked_at IS NULL
         ORDER BY c.requested_at
-        LIMIT ?
         """,
         (limit,),
     ).fetchall()
@@ -340,15 +341,18 @@ def check_new_folders(connection: sqlite3.Connection, sorter: Sorter, now: datet
             continue
         allowed = {candidate.id for candidate in candidates}
         connection.executemany(
-            "INSERT OR IGNORE INTO folder_suggestions (item_id, folder_id) VALUES (?, ?)",
-            [(item_id, folder_id) for item_id in matched if item_id in allowed],
+            """
+            INSERT INTO folder_suggestions (item_id, folder_id)
+            SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM folder_suggestions WHERE item_id = ? AND folder_id = ?)
+            """,
+            [(item_id, folder_id, item_id, folder_id) for item_id in matched if item_id in allowed],
         )
         connection.execute("UPDATE folder_checks SET checked_at = ? WHERE folder_id = ?", (_iso(now), folder_id))
         connection.commit()
     return len(checks)
 
 
-def also_suggestions_for(connection: sqlite3.Connection, user_id: int) -> dict[int, list[int]]:
+def also_suggestions_for(connection: Connection, user_id: int) -> dict[int, list[int]]:
     rows = connection.execute(
         """
         SELECT s.item_id, s.folder_id FROM folder_suggestions s
@@ -365,17 +369,17 @@ def also_suggestions_for(connection: sqlite3.Connection, user_id: int) -> dict[i
     return suggestions
 
 
-def accept_also(connection: sqlite3.Connection, user_id: int, item_id: int, folder_id: int) -> None:
+def accept_also(connection: Connection, user_id: int, item_id: int, folder_id: int) -> None:
     _forget_also(connection, user_id, item_id, folder_id)
     add_to_folder(connection, user_id, item_id, folder_id)
 
 
-def dismiss_also(connection: sqlite3.Connection, user_id: int, item_id: int, folder_id: int) -> None:
+def dismiss_also(connection: Connection, user_id: int, item_id: int, folder_id: int) -> None:
     _forget_also(connection, user_id, item_id, folder_id)
     connection.commit()
 
 
-def resort_if_waiting(connection: sqlite3.Connection, user_id: int, item_id: int) -> bool:
+def resort_if_waiting(connection: Connection, user_id: int, item_id: int) -> bool:
     # After an edit turns a line into a reminder without a time, its old sort
     # result is dropped so the sorter reads the new text for a time.
     cursor = connection.execute(
@@ -393,7 +397,7 @@ def resort_if_waiting(connection: sqlite3.Connection, user_id: int, item_id: int
     return cursor.rowcount == 1
 
 
-def requeue_unsorted(connection: sqlite3.Connection, user_id: int, only_unmatched: bool = False) -> int:
+def requeue_unsorted(connection: Connection, user_id: int, only_unmatched: bool = False) -> int:
     # only_unmatched is used when a folder is created or renamed: lines that
     # matched nothing may match the new name. Lines that already have a
     # suggestion are left alone so an AI engine is not asked again for all of them.
@@ -411,7 +415,7 @@ def requeue_unsorted(connection: sqlite3.Connection, user_id: int, only_unmatche
     return cursor.rowcount
 
 
-def results_for(connection: sqlite3.Connection, user_id: int) -> dict[int, dict]:
+def results_for(connection: Connection, user_id: int) -> dict[int, dict]:
     rows = connection.execute(
         """
         SELECT r.item_id, r.status, r.folder_id, r.confidence, r.engine,
@@ -439,12 +443,12 @@ def results_for(connection: sqlite3.Connection, user_id: int) -> dict[int, dict]
 CHECK_CANDIDATES = 60
 
 
-def _candidates(connection: sqlite3.Connection, user_id: int, folder_id: int) -> list[Candidate]:
+def _candidates(connection: Connection, user_id: int, folder_id: int) -> list[Candidate]:
     # Recent lines that are filed somewhere else, with their link or image
     # title, so the engine can tell what a bare link is about.
     rows = connection.execute(
         """
-        SELECT i.id, i.body, p.title AS link_title, g.title AS image_title
+        SELECT TOP (?) i.id, i.body, p.title AS link_title, g.title AS image_title
         FROM items i
         LEFT JOIN link_previews p ON p.item_id = i.id
         LEFT JOIN images g ON g.item_id = i.id
@@ -452,9 +456,8 @@ def _candidates(connection: sqlite3.Connection, user_id: int, folder_id: int) ->
           AND EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id)
           AND NOT EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id AND m.folder_id = ?)
         ORDER BY i.created_at DESC
-        LIMIT ?
         """,
-        (user_id, folder_id, CHECK_CANDIDATES),
+        (CHECK_CANDIDATES, user_id, folder_id),
     ).fetchall()
     candidates = []
     for row in rows:
@@ -463,7 +466,7 @@ def _candidates(connection: sqlite3.Connection, user_id: int, folder_id: int) ->
     return candidates
 
 
-def _forget_also(connection: sqlite3.Connection, user_id: int, item_id: int, folder_id: int) -> None:
+def _forget_also(connection: Connection, user_id: int, item_id: int, folder_id: int) -> None:
     cursor = connection.execute(
         """
         DELETE FROM folder_suggestions
@@ -476,7 +479,7 @@ def _forget_also(connection: sqlite3.Connection, user_id: int, item_id: int, fol
 
 
 def _links(
-    connection: sqlite3.Connection,
+    connection: Connection,
     item_id: int,
     body: str,
     fetch_preview: Callable[[str], LinkPreview | None] | None,
@@ -497,9 +500,9 @@ def _links(
 
 
 def _apply(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
-    row: sqlite3.Row,
+    row: Row,
     suggestion: Suggestion,
     options: list[FolderOption],
     engine: str,
@@ -561,7 +564,7 @@ def _apply(
 
 
 def _split(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     item_id: int,
     parts: list[Part],
@@ -586,7 +589,7 @@ def _split(
 
 
 def _record_failure(
-    connection: sqlite3.Connection,
+    connection: Connection,
     item_id: int,
     engine: str,
     attempts: int,
@@ -601,7 +604,7 @@ def _record_failure(
 
 
 def _record(
-    connection: sqlite3.Connection,
+    connection: Connection,
     item_id: int,
     status: str,
     folder_id: int | None,
@@ -618,23 +621,31 @@ def _record(
     # picked up the same item cannot replace each other's result.
     connection.execute(
         """
-        INSERT INTO sort_results
+        MERGE sort_results WITH (HOLDLOCK) AS r
+        USING (
+            SELECT ? AS item_id, ? AS status, ? AS folder_id, ? AS confidence, ? AS engine, ? AS attempts,
+                   ? AS retry_at, ? AS error, ? AS sorted_at, ? AS proposed_name, ? AS proposed_parent_id,
+                   ? AS suggested_remind_at
+        ) AS s
+        ON r.item_id = s.item_id
+        WHEN MATCHED AND r.status = 'retry' THEN UPDATE SET
+            status = s.status,
+            folder_id = s.folder_id,
+            confidence = s.confidence,
+            engine = s.engine,
+            attempts = s.attempts,
+            retry_at = s.retry_at,
+            error = s.error,
+            sorted_at = s.sorted_at,
+            proposed_name = s.proposed_name,
+            proposed_parent_id = s.proposed_parent_id,
+            suggested_remind_at = s.suggested_remind_at
+        WHEN NOT MATCHED THEN INSERT
             (item_id, status, folder_id, confidence, engine, attempts, retry_at, error, sorted_at,
              proposed_name, proposed_parent_id, suggested_remind_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(item_id) DO UPDATE SET
-            status = excluded.status,
-            folder_id = excluded.folder_id,
-            confidence = excluded.confidence,
-            engine = excluded.engine,
-            attempts = excluded.attempts,
-            retry_at = excluded.retry_at,
-            error = excluded.error,
-            sorted_at = excluded.sorted_at,
-            proposed_name = excluded.proposed_name,
-            proposed_parent_id = excluded.proposed_parent_id,
-            suggested_remind_at = excluded.suggested_remind_at
-        WHERE sort_results.status = 'retry'
+        VALUES
+            (s.item_id, s.status, s.folder_id, s.confidence, s.engine, s.attempts, s.retry_at, s.error,
+             s.sorted_at, s.proposed_name, s.proposed_parent_id, s.suggested_remind_at);
         """,
         (
             item_id,

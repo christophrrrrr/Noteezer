@@ -1,13 +1,13 @@
-import sqlite3
 from datetime import date, datetime, timezone, tzinfo
 
 from app.classify import URL_PATTERN, ClassificationError, classify
+from app.db import Connection, Row
 from app.folders import require_folder
 from app.reminders import refresh, schedule
 
 
 def save_item(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     body: str,
     remind_at: datetime | None,
@@ -25,14 +25,16 @@ def save_item(
         repeat_daily = False
         repeat_until = None
     stamp = now.astimezone(timezone.utc).isoformat()
-    cursor = connection.execute(
-        """
-        INSERT INTO items (user_id, body, kind, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (user_id, classified.body, classified.kind, stamp, stamp),
+    item_id = int(
+        connection.execute(
+            """
+            INSERT INTO items (user_id, body, kind, created_at, updated_at)
+            OUTPUT INSERTED.id
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, classified.body, classified.kind, stamp, stamp),
+        ).fetchone()["id"]
     )
-    item_id = int(cursor.lastrowid)
     if folder_id is not None:
         connection.execute("INSERT INTO item_folders (item_id, folder_id) VALUES (?, ?)", (item_id, folder_id))
     _attach_tags(connection, user_id, item_id, classified.tags)
@@ -43,7 +45,7 @@ def save_item(
 
 
 def update_item(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     item_id: int,
     body: str,
@@ -79,18 +81,32 @@ def update_item(
     connection.commit()
 
 
-def delete_item(connection: sqlite3.Connection, user_id: int, item_id: int) -> None:
+def delete_item(connection: Connection, user_id: int, item_id: int) -> None:
+    # Parts split from this line keep existing on their own. SQL Server refuses
+    # ON DELETE SET NULL from a table to itself, so the link is cleared here.
+    connection.execute(
+        "UPDATE items SET split_from = NULL WHERE split_from = ? AND user_id = ?",
+        (item_id, user_id),
+    )
     cursor = connection.execute(
         "DELETE FROM items WHERE id = ? AND user_id = ?",
         (item_id, user_id),
     )
     if cursor.rowcount == 0:
+        connection.rollback()
         raise LookupError("item not found")
     connection.commit()
 
 
+# Adds an item to a folder unless it is in it already (0 or 1 rows).
+ADD_MEMBERSHIP = """
+    INSERT INTO item_folders (item_id, folder_id)
+    SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM item_folders WHERE item_id = ? AND folder_id = ?)
+"""
+
+
 def set_folders(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     item_id: int,
     folder_ids: list[int],
@@ -101,14 +117,14 @@ def set_folders(
         require_folder(connection, user_id, folder_id)
     connection.execute("DELETE FROM item_folders WHERE item_id = ?", (item_id,))
     connection.executemany(
-        "INSERT OR IGNORE INTO item_folders (item_id, folder_id) VALUES (?, ?)",
-        [(item_id, folder_id) for folder_id in folder_ids],
+        ADD_MEMBERSHIP,
+        [(item_id, folder_id, item_id, folder_id) for folder_id in folder_ids],
     )
     connection.commit()
 
 
 def move_item(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     item_id: int,
     folder_id: int | None,
@@ -116,19 +132,19 @@ def move_item(
     set_folders(connection, user_id, item_id, [] if folder_id is None else [folder_id])
 
 
-def add_to_folder(connection: sqlite3.Connection, user_id: int, item_id: int, folder_id: int) -> bool:
+def add_to_folder(connection: Connection, user_id: int, item_id: int, folder_id: int) -> bool:
     _owned_item(connection, user_id, item_id)
     require_folder(connection, user_id, folder_id)
     cursor = connection.execute(
-        "INSERT OR IGNORE INTO item_folders (item_id, folder_id) VALUES (?, ?)",
-        (item_id, folder_id),
+        ADD_MEMBERSHIP,
+        (item_id, folder_id, item_id, folder_id),
     )
     connection.commit()
     return cursor.rowcount == 1
 
 
 def file_unsorted_item(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     item_id: int,
     folder_id: int,
@@ -149,7 +165,7 @@ def file_unsorted_item(
     return cursor.rowcount == 1
 
 
-def change_plain_note_kind(connection: sqlite3.Connection, user_id: int, item_id: int, kind: str) -> bool:
+def change_plain_note_kind(connection: Connection, user_id: int, item_id: int, kind: str) -> bool:
     # Used by automatic sorting. Only a plain note becomes an idea or a task;
     # links, reminders, and lines that already have a kind are left alone.
     if kind not in ("idea", "task"):
@@ -163,7 +179,7 @@ def change_plain_note_kind(connection: sqlite3.Connection, user_id: int, item_id
 
 
 def schedule_unset_reminder(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     item_id: int,
     remind_at: datetime,
@@ -187,7 +203,7 @@ def schedule_unset_reminder(
 
 
 def make_reminder(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     item_id: int,
     remind_at: datetime,
@@ -203,7 +219,7 @@ def make_reminder(
 
 
 def split_item(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     item_id: int,
     parts: list[tuple[str, str | None]],
@@ -240,7 +256,7 @@ def split_item(
     return created
 
 
-def undo_split(connection: sqlite3.Connection, user_id: int, item_id: int) -> int:
+def undo_split(connection: Connection, user_id: int, item_id: int) -> int:
     row = connection.execute(
         "SELECT id, split_from, hidden FROM items WHERE id = ? AND user_id = ?",
         (item_id, user_id),
@@ -256,7 +272,7 @@ def undo_split(connection: sqlite3.Connection, user_id: int, item_id: int) -> in
     return int(original)
 
 
-def count_by_folder(connection: sqlite3.Connection, user_id: int) -> dict[int | None, int]:
+def count_by_folder(connection: Connection, user_id: int) -> dict[int | None, int]:
     # A line in two folders counts in both. None is the number in Unsorted.
     rows = connection.execute(
         """
@@ -281,7 +297,7 @@ def count_by_folder(connection: sqlite3.Connection, user_id: int) -> dict[int | 
     return counts
 
 
-def count_items(connection: sqlite3.Connection, user_id: int) -> int:
+def count_items(connection: Connection, user_id: int) -> int:
     return int(
         connection.execute(
             "SELECT COUNT(*) AS total FROM items WHERE user_id = ? AND hidden = 0",
@@ -290,11 +306,11 @@ def count_items(connection: sqlite3.Connection, user_id: int) -> int:
     )
 
 
-def item_kind(connection: sqlite3.Connection, user_id: int, item_id: int) -> str:
+def item_kind(connection: Connection, user_id: int, item_id: int) -> str:
     return _owned_item(connection, user_id, item_id)["kind"]
 
 
-def toggle_task(connection: sqlite3.Connection, user_id: int, item_id: int) -> bool:
+def toggle_task(connection: Connection, user_id: int, item_id: int) -> bool:
     row = connection.execute(
         "SELECT kind, task_done FROM items WHERE id = ? AND user_id = ?",
         (item_id, user_id),
@@ -307,7 +323,7 @@ def toggle_task(connection: sqlite3.Connection, user_id: int, item_id: int) -> b
 
 
 def set_task_done(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     item_id: int,
     done: bool,
@@ -323,7 +339,7 @@ def set_task_done(
 
 
 def list_items(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     query: str = "",
     now: datetime | None = None,
@@ -422,7 +438,7 @@ def _check_reminder(
         raise ClassificationError("The end date has to be on or after the start.")
 
 
-def _owned_item(connection: sqlite3.Connection, user_id: int, item_id: int) -> sqlite3.Row:
+def _owned_item(connection: Connection, user_id: int, item_id: int) -> Row:
     row = connection.execute(
         "SELECT id, kind FROM items WHERE id = ? AND user_id = ?",
         (item_id, user_id),
@@ -433,7 +449,7 @@ def _owned_item(connection: sqlite3.Connection, user_id: int, item_id: int) -> s
 
 
 def _attach_tags(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     item_id: int,
     tags: tuple[str, ...],
@@ -441,10 +457,10 @@ def _attach_tags(
     for name in tags:
         connection.execute(
             """
-            INSERT INTO tags (user_id, name) VALUES (?, ?)
-            ON CONFLICT(user_id, name) DO NOTHING
+            INSERT INTO tags (user_id, name)
+            SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM tags WHERE user_id = ? AND name = ?)
             """,
-            (user_id, name),
+            (user_id, name, user_id, name),
         )
         tag_id = connection.execute(
             "SELECT id FROM tags WHERE user_id = ? AND name = ?",

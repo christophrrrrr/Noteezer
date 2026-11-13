@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.db import connect, init_db
+from app.db import connect
 from app.folders import create_folder, list_folders
 from app.gemini import GeminiSorter, build_prompt, parse_answer
 from app.inbox import list_items, save_item
@@ -124,8 +124,7 @@ def test_calls_are_spaced_out_for_the_free_tier() -> None:
 
 
 def test_a_proposed_folder_is_created_when_accepted(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "app.db")
-    init_db(connection)
+    connection = connect()
     owner = register_user(connection, "a@example.com", "password1", NOW)
     projects = create_folder(connection, owner, "Projects", NOW)
     first = save_item(connection, owner, "Climbing project cool", None, NOW)

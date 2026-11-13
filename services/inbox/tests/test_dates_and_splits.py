@@ -4,16 +4,16 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.db import connect, init_db
+from app.db import connect
 from app.folders import create_folder
-from app.inbox import list_items, save_item, split_item
+from app.inbox import delete_item, list_items, save_item, split_item
 from app.sorting import (
     Part,
     Suggestion,
     accept_reminder,
     requeue_unsorted,
-    results_for,
     resort_if_waiting,
+    results_for,
     sort_pending,
     undo_auto_split,
 )
@@ -24,8 +24,7 @@ SATURDAY_3PM = datetime(2026, 10, 3, 13, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "app.db")
-    init_db(connection)
+    connection = connect()
     return connection
 
 
@@ -183,4 +182,20 @@ def test_editing_a_line_into_a_timeless_reminder_reads_it_again(tmp_path: Path) 
     assert resort_if_waiting(connection, owner, item_id) is True
     sort_pending(connection, Answer(Suggestion(None, 0.0, remind_at=SATURDAY_3PM)), NOW)
     assert list_items(connection, owner)[0]["status"] == "scheduled"
+    connection.close()
+
+
+def test_deleting_a_split_original_keeps_its_parts(tmp_path: Path) -> None:
+    # SQL Server refuses ON DELETE SET NULL from items to itself, so
+    # delete_item clears split_from on the parts before the original goes.
+    connection = _db(tmp_path)
+    owner = _user(connection)
+    original = save_item(connection, owner, "milk, eggs", None, NOW)
+    parts = split_item(connection, owner, original, [("milk", None), ("eggs", None)], NOW)
+
+    delete_item(connection, owner, original)
+    rows = connection.execute("SELECT id, split_from FROM items ORDER BY id").fetchall()
+    assert [(row["id"], row["split_from"]) for row in rows] == [(parts[0], None), (parts[1], None)]
+    with pytest.raises(LookupError):
+        delete_item(connection, owner, original)
     connection.close()

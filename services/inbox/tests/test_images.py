@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db import connect, init_db
+from app.db import connect
 from app.folders import create_folder
 from app.gemini import GeminiSorter, build_prompt, parse_answer
 from app.images import (
@@ -29,8 +29,7 @@ JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "app.db")
-    init_db(connection)
+    connection = connect()
     return connection
 
 
@@ -169,7 +168,6 @@ def test_gemini_gets_the_image_and_returns_a_title_and_its_text() -> None:
 
 
 def test_uploading_and_viewing_an_image_through_the_pages(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SESSION_SECRET", "test-secret")
     with TestClient(create_app()) as client:
         client.post("/register", data={"email": "a@example.com", "password": "password1"})
