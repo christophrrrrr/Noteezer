@@ -1,5 +1,6 @@
-import sqlite3
 from datetime import date, datetime, timedelta, timezone
+
+from app.db import Connection, Row
 
 SNOOZE_FOR = timedelta(hours=1)
 
@@ -18,7 +19,7 @@ def next_occurrence(remind_at: datetime, repeat_until: date | None) -> datetime 
 
 
 def schedule(
-    connection: sqlite3.Connection,
+    connection: Connection,
     item_id: int,
     remind_at: datetime,
     now: datetime,
@@ -39,14 +40,18 @@ def schedule(
     until = repeat_until.isoformat() if repeat_until else None
     connection.execute(
         """
-        INSERT INTO reminders (item_id, remind_at, status, repeat_daily, repeat_until)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(item_id) DO UPDATE SET
-            remind_at = excluded.remind_at,
-            status = excluded.status,
+        MERGE reminders WITH (HOLDLOCK) AS r
+        USING (SELECT ? AS item_id, ? AS remind_at, ? AS status, ? AS repeat_daily, ? AS repeat_until) AS s
+        ON r.item_id = s.item_id
+        WHEN MATCHED THEN UPDATE SET
+            remind_at = s.remind_at,
+            status = s.status,
             snoozed_until = NULL,
-            repeat_daily = excluded.repeat_daily,
-            repeat_until = excluded.repeat_until
+            repeat_daily = s.repeat_daily,
+            repeat_until = s.repeat_until
+        WHEN NOT MATCHED THEN
+            INSERT (item_id, remind_at, status, repeat_daily, repeat_until)
+            VALUES (s.item_id, s.remind_at, s.status, s.repeat_daily, s.repeat_until);
         """,
         (
             item_id,
@@ -59,7 +64,7 @@ def schedule(
     return status
 
 
-def refresh(connection: sqlite3.Connection, user_id: int, now: datetime) -> None:
+def refresh(connection: Connection, user_id: int, now: datetime) -> None:
     stamp = now.astimezone(timezone.utc).isoformat()
     connection.execute(
         """
@@ -81,7 +86,7 @@ def refresh(connection: sqlite3.Connection, user_id: int, now: datetime) -> None
     )
 
 
-def complete(connection: sqlite3.Connection, user_id: int, item_id: int, now: datetime) -> str:
+def complete(connection: Connection, user_id: int, item_id: int, now: datetime) -> str:
     row = _owned(connection, user_id, item_id)
     if not row["repeat_daily"]:
         _set_status(connection, item_id, "done", None, row["remind_at"])
@@ -97,7 +102,7 @@ def complete(connection: sqlite3.Connection, user_id: int, item_id: int, now: da
     return status
 
 
-def snooze(connection: sqlite3.Connection, user_id: int, item_id: int, now: datetime) -> datetime:
+def snooze(connection: Connection, user_id: int, item_id: int, now: datetime) -> datetime:
     row = _owned(connection, user_id, item_id)
     if row["status"] == "done":
         raise ValueError("a finished reminder cannot be snoozed")
@@ -106,7 +111,7 @@ def snooze(connection: sqlite3.Connection, user_id: int, item_id: int, now: date
     return until
 
 
-def _owned(connection: sqlite3.Connection, user_id: int, item_id: int) -> sqlite3.Row:
+def _owned(connection: Connection, user_id: int, item_id: int) -> Row:
     row = connection.execute(
         """
         SELECT r.remind_at, r.status, r.repeat_daily, r.repeat_until
@@ -122,7 +127,7 @@ def _owned(connection: sqlite3.Connection, user_id: int, item_id: int) -> sqlite
 
 
 def _set_status(
-    connection: sqlite3.Connection,
+    connection: Connection,
     item_id: int,
     status: str,
     snoozed_until: str | None,

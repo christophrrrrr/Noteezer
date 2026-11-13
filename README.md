@@ -2,7 +2,7 @@
 
 Noteezer is a phone-friendly capture app for the notes, tasks, links, and reminders that would otherwise be messages sent to yourself.
 
-You type one line and save it. Optional buttons can force the kind. A reminder takes its time from a picker or, with Gemini, from the text itself. The app stores everything in SQLite and shows what is due when you open it.
+You type one line and save it. Optional buttons can force the kind. A reminder takes its time from a picker or, with Gemini, from the text itself. The app stores everything in SQL Server (Azure SQL when deployed) and shows what is due when you open it.
 
 The use case is approved. You can register, save a line, search it, edit it, delete it, and mark a task done. A reminder can be a single time or every day from a start time until an optional end date. Snooze hides it for one hour. Marking a daily reminder done moves it to the next day.
 
@@ -18,7 +18,7 @@ One person who currently pastes notes into a chat with themselves and later sear
 
 **Sorting.** Files new lines from Unsorted into a folder in the background. First the title of a line's link is fetched: YouTube through oEmbed, other pages from their `<head>`. Links that point into a private network are refused. The rules come next: a line that names a folder or has its name as a `#tag`, including in a link title, goes there, and the deepest matching folder wins. If the rules are not sure and `GEMINI_API_KEY` is set, Gemini picks a folder with a confidence, or proposes a new folder. A `#tag` or folder name the rules find still decides the folder, because that is the user's own choice, but Gemini is asked for every line so it can also read times and kinds. Calls are spaced 4 seconds apart to stay inside the free tier. A confident answer is filed, into every folder the engine is sure about (a line with `#tabletennis #coolvideos` goes into both), and marked "filed by rules" or "filed by gemini". An unclear line stays in Unsorted with a suggestion (Accept) or a proposed folder (Create folder). Failed calls are retried with a growing wait. Gemini also turns a plain note into a task or an idea; links, reminders, and lines with a `todo`, `buy`, or `idea` prefix keep their kind. A note that holds several separate points, like a list of bugs under a heading, is split into one item per point, and each part is sorted on its own. The original is hidden, not deleted, and Undo split on any part brings it back. Creating or renaming a folder retries the lines that matched nothing, and Sort again retries everything in Unsorted. A new folder is also checked against lines that are already filed: one call looks through the 60 most recent ones and puts an "Also add to Cool videos" button on those that fit. Nothing is moved without a tap.
 
-**Images.** A line can carry one screenshot or photo: pick it with the image field or paste it into the text box. Only PNG, JPEG, WebP, and GIF up to 10 MB are accepted, judged from the file's bytes. Images are stored in SQLite and served only to their owner. With "Let AI read this image" ticked (the default), Gemini reads the image while sorting. A line saved with only an image starts as "Screenshot" and takes Gemini's title as its text, and the text Gemini read is shown below the image and found by search. Unticked, the image never leaves the server.
+**Images.** A line can carry one screenshot or photo: pick it with the image field or paste it into the text box. Only PNG, JPEG, WebP, and GIF up to 10 MB are accepted, judged from the file's bytes. Images are stored in the database and served only to their owner. With "Let AI read this image" ticked (the default), Gemini reads the image while sorting. A line saved with only an image starts as "Screenshot" and takes Gemini's title as its text, and the text Gemini read is shown below the image and found by search. Unticked, the image never leaves the server.
 
 **Reminders.** Stores when an item is due and whether it is scheduled, due, snoozed, or done. It does not store the item text. Inbox saves the item, then calls `schedule(item_id, when)` when a time was picked.
 
@@ -50,7 +50,17 @@ Push notifications to the phone are not built (ADR-5). The in-process background
 
 ## Run
 
-Noteezer is being split into two services (ADR-6). Until the reminders service exists, the whole app runs as the inbox service, from its folder:
+Noteezer is being split into two services (ADR-6). Until the reminders service exists, the whole app runs as the inbox service.
+
+It needs a SQL Server. Locally that is a container (Docker Desktop has to be running). Choose a password of your own (at least 8 characters with upper case, lower case, and digits; SQL Server refuses weaker ones) and never commit it. In PowerShell:
+
+```
+$env:DB_PASSWORD = "<your password>"
+docker run -d --name noteezer-sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=$env:DB_PASSWORD -p 127.0.0.1:1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+docker exec noteezer-sql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $env:DB_PASSWORD -Q "CREATE DATABASE noteezer_inbox; ALTER DATABASE noteezer_inbox SET READ_COMMITTED_SNAPSHOT ON"
+```
+
+The container only listens on this computer (`127.0.0.1`). Put the same password in `services/inbox/.env` as `DB_PASSWORD=...`; that file is git-ignored. Then, from the service's folder:
 
 ```
 cd services\inbox
@@ -60,12 +70,16 @@ pip install -r requirements.txt
 python -m app
 ```
 
-The process listens on `0.0.0.0` and needs no setup step: the database and its tables are created on the first start. Everything is configured with environment variables, and none is required:
+The process listens on `0.0.0.0`. On start it applies the numbered SQL files in `services/inbox/migrations` that the database has not seen yet, each once and in its own transaction, and records them in `schema_migrations`. `python -m app.migrate` does the same by hand. A file that was applied is never edited; a change is a new, higher number. Everything else is configured with environment variables:
 
 | Variable | Default | What it does |
 |---|---|---|
 | `PORT` | `8000` | Port to listen on. |
-| `DATA_DIR` | `data` | Folder for the SQLite file, which is `$DATA_DIR/noteezer.db`. The folder is created if missing. |
+| `DB_SERVER` | `localhost` | SQL Server host. |
+| `DB_PORT` | `1433` | SQL Server port. |
+| `DB_USER` | `sa` | SQL login. |
+| `DB_PASSWORD` | empty | Password for that login. Required. |
+| `DB_NAME` | `noteezer_inbox` | Database. It must exist; the migrations create the tables in it. |
 | `SESSION_SECRET` | `dev-only-change-me` | Signs the login cookie. Set it to a long random value anywhere but your own laptop. |
 | `GEMINI_API_KEY` | not set | Turns on Gemini sorting. Without it the rules sort and the app works the same otherwise. |
 | `SORTER` | `auto` | `auto` uses Gemini when a key is set and the rules otherwise, `rules` never calls Gemini, `gemini` asks for it. |
@@ -95,11 +109,11 @@ Noteezer installs as an app on Android (Chrome) and iPhone (Safari, Add to Home 
 
 The app is a manifest (`services/inbox/app/static/manifest.webmanifest`) and a service worker (`services/inbox/app/static/sw.js`). The worker caches only the styles, script, and icons, and shows an offline page when the server cannot be reached. Notes and images are never cached on the phone. The login cookie lasts 90 days, so the installed app stays signed in.
 
-Core logic tests, with coverage for the inbox, folder, sorting, link preview, Gemini, image, reminder, account, and kind rules modules. The tests never call Gemini or fetch real pages; they use fakes:
+Core logic tests, with coverage for the inbox, folder, sorting, link preview, Gemini, image, reminder, account, kind rules, database, and migration modules. The tests never call Gemini or fetch real pages; they use fakes. They do run against a real SQL Server, the container above: each run creates a fresh `noteezer_inbox_test` database, migrates it, empties it before every test, and drops it at the end. `DB_SERVER`, `DB_PORT`, `DB_USER`, and `DB_PASSWORD` point at the server, read from the environment or `services/inbox/.env`; without `DB_PASSWORD` the run stops with a message:
 
 ```
 cd services\inbox
-pytest --cov=app.classify --cov=app.inbox --cov=app.reminders --cov=app.users --cov=app.passwords --cov=app.folders --cov=app.sorting --cov=app.links --cov=app.gemini --cov=app.images --cov-report=term-missing
+pytest --cov=app.classify --cov=app.inbox --cov=app.reminders --cov=app.users --cov=app.passwords --cov=app.folders --cov=app.sorting --cov=app.links --cov=app.gemini --cov=app.images --cov=app.db --cov=app.migrate --cov-report=term-missing
 ```
 
-That run is 103 tests and 96% coverage on those modules.
+That run is 112 tests and 95% coverage on those modules.

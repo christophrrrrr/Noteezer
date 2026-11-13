@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.db import connect, init_db
+from app.db import connect
 from app.folders import create_folder, delete_folder
 from app.inbox import list_items, move_item, save_item
 from app.sorting import (
@@ -30,8 +30,7 @@ FOLDERS = [PROJECTS, GAME, MAPS, WATCH]
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "app.db")
-    init_db(connection)
+    connection = connect()
     return connection
 
 

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.db import connect, init_db
+from app.db import connect
 from app.passwords import hash_password, verify_password
 from app.sessions import read_user_id, sign_user_id
 from app.users import AccountError, authenticate, register_user
@@ -18,8 +18,7 @@ def test_password_hash_verifies_and_rejects_the_wrong_password() -> None:
 
 
 def test_register_and_login_use_the_email(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "app.db")
-    init_db(connection)
+    connection = connect()
     user_id = register_user(connection, "A@Example.com", "password1", NOW)
     assert authenticate(connection, "a@example.com", "password1") == user_id
     assert authenticate(connection, "a@example.com", "nope-nope") is None
@@ -29,8 +28,7 @@ def test_register_and_login_use_the_email(tmp_path: Path) -> None:
 
 
 def test_register_rejects_a_bad_email_and_a_short_password(tmp_path: Path) -> None:
-    connection = connect(tmp_path / "app.db")
-    init_db(connection)
+    connection = connect()
     with pytest.raises(AccountError):
         register_user(connection, "not-an-email", "password1", NOW)
     with pytest.raises(AccountError):

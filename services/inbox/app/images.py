@@ -1,6 +1,7 @@
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
+from app.db import Connection
 
 MAX_BYTES = 10 * 1024 * 1024
 PLACEHOLDER = "Screenshot"
@@ -38,7 +39,7 @@ def check_image(data: bytes) -> str:
 
 
 def attach_image(
-    connection: sqlite3.Connection,
+    connection: Connection,
     item_id: int,
     data: bytes,
     ai_allowed: bool,
@@ -51,7 +52,7 @@ def attach_image(
     connection.commit()
 
 
-def image_for(connection: sqlite3.Connection, user_id: int, item_id: int) -> Image | None:
+def image_for(connection: Connection, user_id: int, item_id: int) -> Image | None:
     row = connection.execute(
         """
         SELECT g.data, g.mime FROM images g
@@ -63,7 +64,7 @@ def image_for(connection: sqlite3.Connection, user_id: int, item_id: int) -> Ima
     return None if row is None else Image(bytes(row["data"]), row["mime"])
 
 
-def readable_image(connection: sqlite3.Connection, item_id: int) -> Image | None:
+def readable_image(connection: Connection, item_id: int) -> Image | None:
     # The image the sorter may send to an AI engine: only when the user left
     # "Let AI read this image" ticked.
     row = connection.execute(
@@ -73,7 +74,7 @@ def readable_image(connection: sqlite3.Connection, item_id: int) -> Image | None
     return None if row is None else Image(bytes(row["data"]), row["mime"])
 
 
-def images_for(connection: sqlite3.Connection, user_id: int) -> dict[int, dict]:
+def images_for(connection: Connection, user_id: int) -> dict[int, dict]:
     rows = connection.execute(
         """
         SELECT g.item_id, g.ai_allowed, g.title, g.text, g.read_at
@@ -95,7 +96,7 @@ def images_for(connection: sqlite3.Connection, user_id: int) -> dict[int, dict]:
 
 
 def record_reading(
-    connection: sqlite3.Connection,
+    connection: Connection,
     user_id: int,
     item_id: int,
     title: str | None,

@@ -6,7 +6,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.db import connect, init_db
+from app.db import connect
+from app.migrate import migrate
 from app.sorting import sorter_from_env
 from app.web import register_routes
 from app.worker import SortWorker
@@ -16,7 +17,7 @@ from app.worker import SortWorker
 async def lifespan(app: FastAPI):
     connection = connect()
     try:
-        init_db(connection)
+        migrate(connection)
     finally:
         connection.close()
     task = asyncio.create_task(app.state.sort_worker.run())

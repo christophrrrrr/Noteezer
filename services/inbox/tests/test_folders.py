@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.db import connect, init_db
+from app.db import connect
 from app.folders import (
     FolderError,
     create_folder,
@@ -20,8 +20,7 @@ NOW = datetime(2026, 9, 29, 12, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path: Path):
-    connection = connect(tmp_path / "app.db")
-    init_db(connection)
+    connection = connect()
     return connection
 
 
@@ -146,4 +145,27 @@ def test_items_are_filtered_and_moved_between_folders(tmp_path: Path) -> None:
     assert list_items(connection, owner, unsorted=True)[0]["id"] == dune
     with pytest.raises(LookupError):
         move_item(connection, owner, 999, movies)
+    connection.close()
+
+
+def test_deleting_a_folder_clears_new_folder_proposals_inside_it(tmp_path: Path) -> None:
+    # SQL Server allows only one cascade path from folders to sort_results,
+    # so delete_folder clears proposed_parent_id itself.
+    connection = _db(tmp_path)
+    owner = _user(connection)
+    projects = create_folder(connection, owner, "Projects", NOW)
+    game = create_folder(connection, owner, "Game", NOW, parent_id=projects)
+    line = save_item(connection, owner, "level ideas", None, NOW)
+    connection.execute(
+        """
+        INSERT INTO sort_results (item_id, status, engine, sorted_at, proposed_name, proposed_parent_id)
+        VALUES (?, 'review', 'fake', ?, 'Levels', ?)
+        """,
+        (line, NOW.isoformat(), game),
+    )
+    connection.commit()
+
+    delete_folder(connection, owner, projects)
+    row = connection.execute("SELECT proposed_name, proposed_parent_id FROM sort_results").fetchone()
+    assert (row["proposed_name"], row["proposed_parent_id"]) == ("Levels", None)
     connection.close()

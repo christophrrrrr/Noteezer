@@ -1,7 +1,6 @@
 import ipaddress
 import json
 import socket
-import sqlite3
 import ssl
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,6 +10,7 @@ from urllib.parse import urlencode, urljoin, urlsplit
 import httpx
 
 from app.classify import URL_PATTERN
+from app.db import Connection
 
 MAX_BYTES = 512_000
 MAX_REDIRECTS = 3
@@ -57,7 +57,7 @@ def fetch_preview(url: str) -> LinkPreview | None:
 
 
 def save_preview(
-    connection: sqlite3.Connection,
+    connection: Connection,
     item_id: int,
     url: str,
     preview: LinkPreview | None,
@@ -66,14 +66,18 @@ def save_preview(
     # A failed fetch is stored with an empty title so it is not fetched again.
     connection.execute(
         """
-        INSERT INTO link_previews (item_id, url, title, description, site, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(item_id) DO UPDATE SET
-            url = excluded.url,
-            title = excluded.title,
-            description = excluded.description,
-            site = excluded.site,
-            fetched_at = excluded.fetched_at
+        MERGE link_previews WITH (HOLDLOCK) AS p
+        USING (SELECT ? AS item_id, ? AS url, ? AS title, ? AS description, ? AS site, ? AS fetched_at) AS s
+        ON p.item_id = s.item_id
+        WHEN MATCHED THEN UPDATE SET
+            url = s.url,
+            title = s.title,
+            description = s.description,
+            site = s.site,
+            fetched_at = s.fetched_at
+        WHEN NOT MATCHED THEN
+            INSERT (item_id, url, title, description, site, fetched_at)
+            VALUES (s.item_id, s.url, s.title, s.description, s.site, s.fetched_at);
         """,
         (
             item_id,
@@ -87,7 +91,7 @@ def save_preview(
     connection.commit()
 
 
-def stored_preview(connection: sqlite3.Connection, item_id: int) -> tuple[str, LinkPreview | None] | None:
+def stored_preview(connection: Connection, item_id: int) -> tuple[str, LinkPreview | None] | None:
     row = connection.execute(
         "SELECT url, title, description, site FROM link_previews WHERE item_id = ?",
         (item_id,),
@@ -99,7 +103,7 @@ def stored_preview(connection: sqlite3.Connection, item_id: int) -> tuple[str, L
     return row["url"], LinkPreview(row["url"], row["title"], row["description"], row["site"])
 
 
-def previews_for(connection: sqlite3.Connection, user_id: int) -> dict[int, dict]:
+def previews_for(connection: Connection, user_id: int) -> dict[int, dict]:
     rows = connection.execute(
         """
         SELECT p.item_id, p.url, p.title, p.description, p.site

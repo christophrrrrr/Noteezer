@@ -6,7 +6,6 @@ from app.main import create_app
 
 
 def test_register_then_save_shows_the_sorted_line(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SESSION_SECRET", "test-secret")
     with TestClient(create_app()) as client:
         created = client.post(
@@ -27,7 +26,6 @@ def test_register_then_save_shows_the_sorted_line(tmp_path: Path, monkeypatch) -
 
 
 def test_folder_page_saves_into_that_folder(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SESSION_SECRET", "test-secret")
     with TestClient(create_app()) as client:
         client.post("/register", data={"email": "a@example.com", "password": "password1"})
@@ -52,7 +50,6 @@ def test_folder_page_saves_into_that_folder(tmp_path: Path, monkeypatch) -> None
 
 
 def test_a_saved_line_is_sorted_in_the_background(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SESSION_SECRET", "test-secret")
     with TestClient(create_app()) as client:
         client.post("/register", data={"email": "a@example.com", "password": "password1"})
@@ -70,7 +67,6 @@ def test_a_saved_line_is_sorted_in_the_background(tmp_path: Path, monkeypatch) -
 
 
 def test_the_date_picker_is_read_in_the_browser_timezone(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SESSION_SECRET", "test-secret")
     with TestClient(create_app()) as client:
         client.post(
