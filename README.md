@@ -50,19 +50,39 @@ Push notifications to the phone are not built (ADR-5). The in-process background
 
 ## Run
 
-Noteezer is being split into two services (ADR-6). Until the reminders service exists, the whole app runs as the inbox service.
+Noteezer is two services (ADR-6, ADR-7). **inbox** (`services/inbox`, port 8000) has the pages, accounts, lines, folders, sorting, images, and link previews. **reminders** (`services/reminders`, port 8001) stores reminder times and decides when one is due; it has a JSON API and no pages. Each has its own database. Inbox calls reminders over HTTP with a 2 second timeout, and keeps working without times when reminders is down.
 
 It needs a SQL Server. Locally that is a container (Docker Desktop has to be running). Choose a password of your own (at least 8 characters with upper case, lower case, and digits; SQL Server refuses weaker ones) and never commit it. In PowerShell:
 
 ```
 $env:DB_PASSWORD = "<your password>"
 docker run -d --name noteezer-sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=$env:DB_PASSWORD -p 127.0.0.1:1433:1433 mcr.microsoft.com/mssql/server:2022-latest
-docker exec noteezer-sql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $env:DB_PASSWORD -Q "CREATE DATABASE noteezer_inbox; ALTER DATABASE noteezer_inbox SET READ_COMMITTED_SNAPSHOT ON"
+docker exec noteezer-sql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $env:DB_PASSWORD -Q "CREATE DATABASE noteezer_inbox; ALTER DATABASE noteezer_inbox SET READ_COMMITTED_SNAPSHOT ON; CREATE DATABASE noteezer_reminders; ALTER DATABASE noteezer_reminders SET READ_COMMITTED_SNAPSHOT ON"
 ```
 
-The container only listens on this computer (`127.0.0.1`). Put the same password in `services/inbox/.env` as `DB_PASSWORD=...`; that file is git-ignored. Then, from the service's folder:
+The container only listens on this computer (`127.0.0.1`). Each service reads a git-ignored `.env` file in its folder. Both need the same `SESSION_SECRET`, a long random value (`python -c "import secrets; print(secrets.token_hex(32))"` makes one):
 
 ```
+# services/inbox/.env
+DB_PASSWORD=<your password>
+DB_NAME=noteezer_inbox
+SESSION_SECRET=<the same long random value>
+
+# services/reminders/.env
+DB_PASSWORD=<your password>
+DB_NAME=noteezer_reminders
+SESSION_SECRET=<the same long random value>
+```
+
+Then start each service in its own terminal:
+
+```
+cd services\reminders
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python -m app
+
 cd services\inbox
 python -m venv .venv
 .venv\Scripts\activate
@@ -70,23 +90,26 @@ pip install -r requirements.txt
 python -m app
 ```
 
-The process listens on `0.0.0.0`. On start it applies the numbered SQL files in `services/inbox/migrations` that the database has not seen yet, each once and in its own transaction, and records them in `schema_migrations`. `python -m app.migrate` does the same by hand. A file that was applied is never edited; a change is a new, higher number. Everything else is configured with environment variables:
+Each process listens on `0.0.0.0`. On start it applies the numbered SQL files in its `migrations` folder that its database has not seen yet, each once and in its own transaction, and records them in `schema_migrations`. `python -m app.migrate` does the same by hand. A file that was applied is never edited; a change is a new, higher number. Both services log one line per request with a request id; inbox passes the id on to reminders in `X-Request-ID`, so one id finds a request in both logs. `GET /health` on either answers `{"ok": true, "database": "up"}`, or 503 when its database cannot be reached. Everything else is configured with environment variables:
 
 | Variable | Default | What it does |
 |---|---|---|
-| `PORT` | `8000` | Port to listen on. |
+| `PORT` | `8000` inbox, `8001` reminders | Port to listen on. |
 | `DB_SERVER` | `localhost` | SQL Server host. |
 | `DB_PORT` | `1433` | SQL Server port. |
 | `DB_USER` | `sa` | SQL login. |
 | `DB_PASSWORD` | empty | Password for that login. Required. |
-| `DB_NAME` | `noteezer_inbox` | Database. It must exist; the migrations create the tables in it. |
-| `SESSION_SECRET` | `dev-only-change-me` | Signs the login cookie. Set it to a long random value anywhere but your own laptop. |
-| `GEMINI_API_KEY` | not set | Turns on Gemini sorting. Without it the rules sort and the app works the same otherwise. |
+| `DB_NAME` | none | Required. The service's own database. It must exist; the migrations create the tables in it. |
+| `SESSION_SECRET` | none | Required, the same in both services. Signs and checks the login token (ADR-7). |
+| `CORS_ORIGINS` | empty | Both. Comma-separated sites allowed to call the service from a browser, like the UI's address. Empty allows none. |
+| `REMINDERS_URL` | `http://127.0.0.1:8001` | Inbox only. Where the reminders service is. |
+| `REMINDERS_TIMEOUT` | `2` | Inbox only. Seconds to wait for reminders before carrying on without times. |
+| `GEMINI_API_KEY` | not set | Inbox only. Turns on Gemini sorting. Without it the rules sort and the app works the same otherwise. |
 | `SORTER` | `auto` | `auto` uses Gemini when a key is set and the rules otherwise, `rules` never calls Gemini, `gemini` asks for it. |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Model for text lines. |
 | `GEMINI_IMAGE_MODEL` | `gemini-3.8-flash` | Model for lines with an image. |
 
-`python -m app` also reads an optional `.env` file in `services/inbox`, for example with `GEMINI_API_KEY=...`, and variables already set in the environment win. A free key comes from Google AI Studio. On the free tier Google may use the notes it sorts to improve its models.
+Variables already set in the environment win over the `.env` file. `GEMINI_API_KEY=...` can go in `services/inbox/.env` too. A free key comes from Google AI Studio. On the free tier Google may use the notes it sorts to improve its models.
 
 The architecture and database diagrams are in [docs/diagrams.md](docs/diagrams.md).
 
@@ -97,7 +120,7 @@ Open `http://127.0.0.1:8000/register`, create an account, and save a line. A lin
 Noteezer installs as an app on Android (Chrome) and iPhone (Safari, Add to Home Screen). Installing and sharing need HTTPS, and the easiest private way to get it is [Tailscale](https://tailscale.com), which is free for personal use:
 
 1. Install Tailscale on the computer running Noteezer and on the phone, and sign in to both with the same account. In the Tailscale admin console, under DNS, turn on MagicDNS and HTTPS Certificates.
-2. Start Noteezer with `python -m app` in `services/inbox`, then in another terminal run:
+2. Start both services with `python -m app` (in `services/reminders` and in `services/inbox`), then in another terminal run:
 
    ```
    tailscale serve --bg 8000
@@ -109,11 +132,16 @@ Noteezer installs as an app on Android (Chrome) and iPhone (Safari, Add to Home 
 
 The app is a manifest (`services/inbox/app/static/manifest.webmanifest`) and a service worker (`services/inbox/app/static/sw.js`). The worker caches only the styles, script, and icons, and shows an offline page when the server cannot be reached. Notes and images are never cached on the phone. The login cookie lasts 90 days, so the installed app stays signed in.
 
-Core logic tests, with coverage for the inbox, folder, sorting, link preview, Gemini, image, reminder, account, kind rules, database, and migration modules. The tests never call Gemini or fetch real pages; they use fakes. They do run against a real SQL Server, the container above: each run creates a fresh `noteezer_inbox_test` database, migrates it, empties it before every test, and drops it at the end. `DB_SERVER`, `DB_PORT`, `DB_USER`, and `DB_PASSWORD` point at the server, read from the environment or `services/inbox/.env`; without `DB_PASSWORD` the run stops with a message:
+Each service has its own tests. They never call Gemini or fetch real pages; they use fakes. They do run against a real SQL Server, the container above: each run creates fresh test databases, migrates them, empties them before every test, and drops them at the end. `DB_SERVER`, `DB_PORT`, `DB_USER`, and `DB_PASSWORD` point at the server, read from the environment or the service's `.env`; without `DB_PASSWORD` the run stops with a message. The tests set their own `SESSION_SECRET`.
+
+The inbox tests start the real reminders service as a second process, on a free port with its own test database, so every reminder an inbox test saves crosses the seam over real HTTP. `tests/test_seam.py` also points inbox at a reminders that is down, slow, or answering with errors:
 
 ```
 cd services\inbox
-pytest --cov=app.classify --cov=app.inbox --cov=app.reminders --cov=app.users --cov=app.passwords --cov=app.folders --cov=app.sorting --cov=app.links --cov=app.gemini --cov=app.images --cov=app.db --cov=app.migrate --cov-report=term-missing
+pytest --cov=app.classify --cov=app.inbox --cov=app.users --cov=app.passwords --cov=app.folders --cov=app.sorting --cov=app.links --cov=app.gemini --cov=app.images --cov=app.db --cov=app.migrate --cov=app.tokens --cov=app.reminders_client --cov=app.middleware --cov-report=term-missing
+
+cd services\reminders
+pytest --cov=app --cov-report=term-missing
 ```
 
-That run is 112 tests and 95% coverage on those modules.
+Inbox is 121 tests at 96% of those modules. Reminders is 23 tests at 88% of the whole service, with the rules (`reminders.py`) and tokens at 100%.
