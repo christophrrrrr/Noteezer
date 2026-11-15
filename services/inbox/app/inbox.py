@@ -1,9 +1,12 @@
+import logging
 from datetime import date, datetime, timezone, tzinfo
 
 from app.classify import URL_PATTERN, ClassificationError, classify
 from app.db import Connection, Row
 from app.folders import require_folder
-from app.reminders import refresh, schedule
+from app.reminders_client import RemindersUnavailable, default_client
+
+log = logging.getLogger(__name__)
 
 
 def save_item(
@@ -28,19 +31,21 @@ def save_item(
     item_id = int(
         connection.execute(
             """
-            INSERT INTO items (user_id, body, kind, created_at, updated_at)
+            INSERT INTO items (user_id, body, kind, created_at, updated_at, needs_time)
             OUTPUT INSERTED.id
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (user_id, classified.body, classified.kind, stamp, stamp),
+            (user_id, classified.body, classified.kind, stamp, stamp, 1 if classified.kind == "reminder" else 0),
         ).fetchone()["id"]
     )
     if folder_id is not None:
         connection.execute("INSERT INTO item_folders (item_id, folder_id) VALUES (?, ?)", (item_id, folder_id))
     _attach_tags(connection, user_id, item_id, classified.tags)
-    if classified.kind == "reminder" and remind_at is not None:
-        schedule(connection, item_id, remind_at, now, repeat_daily, repeat_until)
+    # The line is committed before reminders is called, so it is never lost
+    # when reminders is down; it then waits as "no time yet" (ADR-7).
     connection.commit()
+    if classified.kind == "reminder" and remind_at is not None:
+        _give_time(connection, user_id, item_id, remind_at, repeat_daily, repeat_until)
     return item_id
 
 
@@ -54,7 +59,8 @@ def update_item(
     forced_kind: str | None = None,
     repeat_daily: bool = False,
     repeat_until: date | None = None,
-) -> None:
+) -> bool:
+    """Saves an edit. True when a new time was stored in reminders."""
     existing = _owned_item(connection, user_id, item_id)
     classified = classify(body, forced_kind)
     _check_reminder(classified.kind, remind_at, repeat_daily, repeat_until)
@@ -67,21 +73,24 @@ def update_item(
         UPDATE items
         SET body = ?, kind = ?,
             task_done = CASE WHEN ? = 'task' THEN task_done ELSE 0 END,
+            needs_time = CASE WHEN ? <> 'reminder' THEN 0 WHEN kind = 'reminder' THEN needs_time ELSE 1 END,
             updated_at = ?
         WHERE id = ? AND user_id = ?
         """,
-        (classified.body, classified.kind, classified.kind, stamp, item_id, user_id),
+        (classified.body, classified.kind, classified.kind, classified.kind, stamp, item_id, user_id),
     )
     connection.execute("DELETE FROM item_tags WHERE item_id = ?", (item_id,))
     _attach_tags(connection, user_id, item_id, classified.tags)
-    if classified.kind == "reminder" and remind_at is not None:
-        schedule(connection, item_id, remind_at, now, repeat_daily, repeat_until)
-    elif existing["kind"] == "reminder":
-        connection.execute("DELETE FROM reminders WHERE item_id = ?", (item_id,))
     connection.commit()
+    if classified.kind == "reminder" and remind_at is not None:
+        return _give_time(connection, user_id, item_id, remind_at, repeat_daily, repeat_until)
+    if existing["kind"] == "reminder" and classified.kind != "reminder":
+        _forget_time(user_id, item_id)
+    return False
 
 
 def delete_item(connection: Connection, user_id: int, item_id: int) -> None:
+    existing = _owned_item(connection, user_id, item_id)
     # Parts split from this line keep existing on their own. SQL Server refuses
     # ON DELETE SET NULL from a table to itself, so the link is cleared here.
     connection.execute(
@@ -96,6 +105,8 @@ def delete_item(connection: Connection, user_id: int, item_id: int) -> None:
         connection.rollback()
         raise LookupError("item not found")
     connection.commit()
+    if existing["kind"] == "reminder":
+        _forget_time(user_id, item_id)
 
 
 # Adds an item to a folder unless it is in it already (0 or 1 rows).
@@ -183,23 +194,22 @@ def schedule_unset_reminder(
     user_id: int,
     item_id: int,
     remind_at: datetime,
-    now: datetime,
 ) -> bool:
     # Used by automatic sorting for "remind ..." lines saved without a time.
     # A reminder that already has a time is never moved.
+    # needs_time is inbox's own note that this line still waits for a time,
+    # so finding such lines needs no call to reminders. RemindersUnavailable
+    # is not caught here: the sorter records a retry and tries again later.
     row = connection.execute(
-        """
-        SELECT i.id FROM items i
-        LEFT JOIN reminders r ON r.item_id = i.id
-        WHERE i.id = ? AND i.user_id = ? AND i.kind = 'reminder' AND r.item_id IS NULL
-        """,
+        "SELECT id FROM items WHERE id = ? AND user_id = ? AND kind = 'reminder' AND needs_time = 1",
         (item_id, user_id),
     ).fetchone()
     if row is None:
         return False
-    schedule(connection, item_id, remind_at, now)
+    stored = default_client().schedule(user_id, item_id, remind_at, keep_existing=True)
+    connection.execute("UPDATE items SET needs_time = 0 WHERE id = ?", (item_id,))
     connection.commit()
-    return True
+    return stored
 
 
 def make_reminder(
@@ -208,14 +218,14 @@ def make_reminder(
     item_id: int,
     remind_at: datetime,
     now: datetime,
-) -> None:
+) -> bool:
     row = connection.execute(
         "SELECT body FROM items WHERE id = ? AND user_id = ?",
         (item_id, user_id),
     ).fetchone()
     if row is None:
         raise LookupError("item not found")
-    update_item(connection, user_id, item_id, row["body"], remind_at, now, forced_kind="reminder")
+    return update_item(connection, user_id, item_id, row["body"], remind_at, now, forced_kind="reminder")
 
 
 def split_item(
@@ -342,18 +352,13 @@ def list_items(
     connection: Connection,
     user_id: int,
     query: str = "",
-    now: datetime | None = None,
     folder_id: int | None = None,
     unsorted: bool = False,
     zone: tzinfo | None = None,
 ) -> list[dict]:
-    if now is not None:
-        refresh(connection, user_id, now)
     sql = """
-        SELECT i.id, i.body, i.kind, i.task_done, i.created_at, i.split_from,
-               r.remind_at, r.status, r.repeat_daily, r.repeat_until
+        SELECT i.id, i.body, i.kind, i.task_done, i.created_at, i.split_from
         FROM items i
-        LEFT JOIN reminders r ON r.item_id = i.id
         WHERE i.user_id = ? AND i.hidden = 0
     """
     parameters: list[object] = [user_id]
@@ -371,8 +376,18 @@ def list_items(
             ))
         """
         parameters += [_like(cleaned)] * 3
-    sql += " ORDER BY CASE WHEN r.status = 'due' THEN 0 ELSE 1 END, i.created_at DESC"
+    sql += " ORDER BY i.created_at DESC, i.id DESC"
     rows = connection.execute(sql, parameters).fetchall()
+    # Times live in the reminders service (ADR-6). One call gets them all; if
+    # it fails, reminder lines are listed without times and marked so the page
+    # can say reminders are unavailable.
+    times: dict[int, dict] = {}
+    unavailable = False
+    if any(row["kind"] == "reminder" for row in rows):
+        try:
+            times = default_client().for_user(user_id)
+        except RemindersUnavailable:
+            unavailable = True
     tags_by_item: dict[int, list[str]] = {int(row["id"]): [] for row in rows}
     folders_by_item: dict[int, list[int]] = {int(row["id"]): [] for row in rows}
     if tags_by_item:
@@ -394,25 +409,30 @@ def list_items(
         ).fetchall()
         for tag_row in tag_rows:
             tags_by_item[int(tag_row["item_id"])].append(tag_row["name"])
-    return [
-        {
-            "id": int(row["id"]),
-            "folder_ids": folders_by_item[int(row["id"])],
-            "body": row["body"],
-            "kind": row["kind"],
-            "task_done": bool(row["task_done"]),
-            "created_at": row["created_at"],
-            "remind_at": row["remind_at"],
-            "remind_local": _local_input(row["remind_at"], zone),
-            "remind_label": _label(row["remind_at"], zone),
-            "split_from": row["split_from"],
-            "status": row["status"],
-            "repeat_daily": bool(row["repeat_daily"]),
-            "repeat_until": row["repeat_until"],
-            "tags": tags_by_item[int(row["id"])],
-        }
-        for row in rows
-    ]
+    listed = []
+    for row in rows:
+        reminder = times.get(int(row["id"]), {}) if row["kind"] == "reminder" else {}
+        listed.append(
+            {
+                "id": int(row["id"]),
+                "folder_ids": folders_by_item[int(row["id"])],
+                "body": row["body"],
+                "kind": row["kind"],
+                "task_done": bool(row["task_done"]),
+                "created_at": row["created_at"],
+                "remind_at": reminder.get("remind_at"),
+                "remind_local": _local_input(reminder.get("remind_at"), zone),
+                "remind_label": _label(reminder.get("remind_at"), zone),
+                "split_from": row["split_from"],
+                "status": reminder.get("status"),
+                "repeat_daily": bool(reminder.get("repeat_daily")),
+                "repeat_until": reminder.get("repeat_until"),
+                "reminder_unavailable": unavailable and row["kind"] == "reminder",
+                "tags": tags_by_item[int(row["id"])],
+            }
+        )
+    # Due reminders first, then newest first (sorted() keeps that order within each group).
+    return sorted(listed, key=lambda item: item["status"] != "due")
 
 
 def _check_reminder(
@@ -436,6 +456,35 @@ def _check_reminder(
         and repeat_until < remind_at.astimezone(timezone.utc).date()
     ):
         raise ClassificationError("The end date has to be on or after the start.")
+
+
+def _give_time(
+    connection: Connection,
+    user_id: int,
+    item_id: int,
+    remind_at: datetime,
+    repeat_daily: bool,
+    repeat_until: date | None,
+) -> bool:
+    try:
+        default_client().schedule(user_id, item_id, remind_at, repeat_daily, repeat_until)
+    except RemindersUnavailable:
+        log.warning("Item %s saved without its time: reminders is unavailable", item_id)
+        connection.execute("UPDATE items SET needs_time = 1 WHERE id = ?", (item_id,))
+        connection.commit()
+        return False
+    connection.execute("UPDATE items SET needs_time = 0 WHERE id = ?", (item_id,))
+    connection.commit()
+    return True
+
+
+def _forget_time(user_id: int, item_id: int) -> None:
+    # If reminders is down the row stays there. It is harmless: inbox only
+    # shows times for items that exist and are reminders.
+    try:
+        default_client().remove(user_id, item_id)
+    except RemindersUnavailable:
+        log.warning("Reminder of item %s not deleted: reminders is unavailable", item_id)
 
 
 def _owned_item(connection: Connection, user_id: int, item_id: int) -> Row:

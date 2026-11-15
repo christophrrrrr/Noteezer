@@ -20,6 +20,7 @@ from app.inbox import (
     undo_split,
 )
 from app.links import LinkPreview, first_url, save_preview, stored_preview
+from app.reminders_client import RemindersUnavailable
 from app.users import user_timezone
 
 FILE_AT = 0.8
@@ -167,7 +168,7 @@ def sort_pending(
           AND (
             (NOT EXISTS (SELECT 1 FROM item_folders m WHERE m.item_id = i.id)
              AND EXISTS (SELECT 1 FROM folders f WHERE f.user_id = i.user_id))
-            OR (i.kind = 'reminder' AND NOT EXISTS (SELECT 1 FROM reminders m WHERE m.item_id = i.id))
+            OR (i.kind = 'reminder' AND i.needs_time = 1)
             OR EXISTS (SELECT 1 FROM images g WHERE g.item_id = i.id AND g.ai_allowed = 1 AND g.read_at IS NULL)
           )
         ORDER BY i.id
@@ -207,7 +208,11 @@ def sort_pending(
             if suggestion.image_title or suggestion.image_text:
                 record_reading(connection, user_id, item_id, suggestion.image_title, suggestion.image_text, now)
             suggestion = replace(suggestion, parts=())
-        _apply(connection, user_id, row, suggestion, options, sorter.name, attempts, now)
+        try:
+            _apply(connection, user_id, row, suggestion, options, sorter.name, attempts, now)
+        except RemindersUnavailable as error:
+            # The time read from the text could not be stored; sort again later.
+            _record_failure(connection, item_id, sorter.name, attempts, f"reminders unavailable: {error}", now)
     return len(rows)
 
 
@@ -272,7 +277,9 @@ def accept_reminder(connection: Connection, user_id: int, item_id: int, now: dat
     if row is None:
         raise LookupError("no reminder time to accept")
     remind_at = datetime.fromisoformat(row["suggested_remind_at"])
-    make_reminder(connection, user_id, item_id, remind_at, now)
+    if not make_reminder(connection, user_id, item_id, remind_at, now):
+        # Keep the suggestion so the button still works once reminders is back.
+        raise RemindersUnavailable("the time was not stored")
     connection.execute("UPDATE sort_results SET suggested_remind_at = NULL WHERE item_id = ?", (item_id,))
     connection.commit()
     return remind_at
@@ -388,7 +395,7 @@ def resort_if_waiting(connection: Connection, user_id: int, item_id: int) -> boo
         WHERE item_id IN (
             SELECT i.id FROM items i
             WHERE i.id = ? AND i.user_id = ? AND i.kind = 'reminder'
-              AND NOT EXISTS (SELECT 1 FROM reminders m WHERE m.item_id = i.id)
+              AND i.needs_time = 1
         )
         """,
         (item_id, user_id),
@@ -543,7 +550,7 @@ def _apply(
     # Any other line with a time only gets a suggestion to accept.
     suggested_at = None
     if suggestion.remind_at is not None and suggestion.remind_at > now:
-        if not schedule_unset_reminder(connection, user_id, item_id, suggestion.remind_at, now):
+        if not schedule_unset_reminder(connection, user_id, item_id, suggestion.remind_at):
             if row["kind"] != "reminder":
                 suggested_at = _iso(suggestion.remind_at)
 

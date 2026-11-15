@@ -5,8 +5,11 @@ recorded in schema_migrations. A file that fails is rolled back completely and
 stops the run, so the database is never left half migrated. Files that were
 applied are never edited: a change is always a new, higher number.
 
-Run by hand with `python -m app.migrate` from services/inbox. The app also
-runs it when it starts.
+Run by hand with `python -m app.migrate` from the service's folder. The app
+also runs it when it starts.
+
+This file is identical in services/inbox and services/reminders; a test in
+each service fails if the two copies differ.
 """
 
 import re

@@ -1,5 +1,8 @@
 """Connections to SQL Server (Azure SQL in production, a container locally).
 
+This file is identical in services/inbox and services/reminders; a test in
+each service fails if the two copies differ. Each service has its own database.
+
 The rest of the code was written against sqlite3, so this module keeps that
 shape: connection.execute(sql, params) returns a cursor, rows can be read by
 column name, and placeholders are written as ?. Only the SQL itself had to
@@ -28,12 +31,17 @@ FIRST_WAIT_SECONDS = 2.0
 
 
 def settings(database: str | None = None) -> dict[str, object]:
+    name = database or os.environ.get("DB_NAME", "")
+    if not name:
+        # Without a name pymssql would quietly use the login's default
+        # database (master), and the migrations would create tables there.
+        raise RuntimeError("DB_NAME is not set.")
     return {
         "server": os.environ.get("DB_SERVER", "localhost"),
         "port": os.environ.get("DB_PORT", "1433"),
         "user": os.environ.get("DB_USER", "sa"),
         "password": os.environ.get("DB_PASSWORD", ""),
-        "database": database or os.environ.get("DB_NAME", "noteezer_inbox"),
+        "database": name,
     }
 
 

@@ -81,6 +81,7 @@
       </header>
 
       {% if error %}<p class="banner error">{{ error }}</p>{% endif %}
+      {% if reminders_down %}<p class="banner error">Reminders are unavailable right now. Lines still save; their times show again when reminders is back.</p>{% endif %}
 
       {% if folder == "unsorted" %}
         {% if has_folders %}

@@ -6,12 +6,10 @@ import pytest
 from app.classify import ClassificationError
 from app.db import connect
 from app.inbox import list_items, save_item
-from app.reminders import initial_status, schedule
 from app.users import register_user
 
 NOW = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
 PAST = datetime(2026, 9, 27, 11, 0, tzinfo=timezone.utc)
-FUTURE = datetime(2026, 9, 27, 15, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path: Path):
@@ -21,12 +19,6 @@ def _db(tmp_path: Path):
 
 def _user(connection, email: str = "a@example.com") -> int:
     return register_user(connection, email, "password1", NOW)
-
-
-def test_past_reminder_is_due_and_future_one_is_scheduled() -> None:
-    assert initial_status(PAST, NOW) == "due"
-    assert initial_status(NOW, NOW) == "due"
-    assert initial_status(FUTURE, NOW) == "scheduled"
 
 
 def test_save_sorts_tags_and_lists_only_that_user(tmp_path: Path) -> None:
@@ -67,13 +59,4 @@ def test_reminder_without_a_time_waits_for_one(tmp_path: Path) -> None:
     with pytest.raises(ClassificationError):
         save_item(connection, owner, "remind stretch", None, NOW, repeat_daily=True)
     assert len(list_items(connection, owner)) == 1
-    connection.close()
-
-
-def test_schedule_rejects_a_note(tmp_path: Path) -> None:
-    connection = _db(tmp_path)
-    owner = _user(connection)
-    item_id = save_item(connection, owner, "just a note", None, NOW)
-    with pytest.raises(ValueError):
-        schedule(connection, item_id, FUTURE, NOW)
     connection.close()

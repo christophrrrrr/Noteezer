@@ -5,11 +5,20 @@ DB_PORT, DB_USER, and DB_PASSWORD variables point at it, from the environment
 or from services/inbox/.env (never from the repo: no password is written in
 code). A fresh database named TEST_DB_NAME is created for each test run,
 migrated once, and emptied before every test, so ids start at 1 each time.
+
+The real reminders service runs next to the tests: the session starts it with
+`python -m app` from services/reminders, on a free port and with its own test
+database, so every reminder an inbox test saves goes over real HTTP (ADR-7).
 """
 
 import os
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 
+import httpx
 import pymssql
 import pytest
 from dotenv import load_dotenv
@@ -18,6 +27,9 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 if not os.environ.get("DB_PASSWORD"):
     pytest.exit("Set DB_PASSWORD (in the environment or services/inbox/.env) to the SQL Server password.", returncode=2)
 os.environ["DB_NAME"] = os.environ.get("TEST_DB_NAME", "noteezer_inbox_test")
+os.environ["SESSION_SECRET"] = "test-secret"
+REMINDERS_DB = os.environ.get("TEST_REMINDERS_DB_NAME", "noteezer_reminders_test")
+REMINDERS_DIR = Path(__file__).resolve().parents[2] / "reminders"
 
 from app.db import connect  # noqa: E402  (needs the variables above)
 from app.migrate import migrate  # noqa: E402
@@ -32,7 +44,6 @@ TABLES = (
     "folder_checks",
     "item_tags",
     "tags",
-    "reminders",
     "sort_results",
     "images",
     "link_previews",
@@ -90,8 +101,59 @@ def _test_database():
         server.close()
 
 
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def reminders_service(tmp_path_factory):
+    """The reminders service as its own process. Yields its base URL."""
+    create_database(REMINDERS_DB)
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    log_file = (tmp_path_factory.mktemp("reminders") / "service.log").open("w", encoding="utf-8")
+    process = subprocess.Popen(
+        [sys.executable, "-m", "app"],
+        cwd=REMINDERS_DIR,
+        env={**os.environ, "DB_NAME": REMINDERS_DB, "PORT": str(port)},
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                if httpx.get(f"{url}/health", timeout=1).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            if process.poll() is not None or time.monotonic() > deadline:
+                pytest.exit(f"The reminders service did not start; see {log_file.name}", returncode=2)
+            time.sleep(0.3)
+        os.environ["REMINDERS_URL"] = url
+        yield url
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+        log_file.close()
+        server = connect("master", autocommit=True)
+        try:
+            drop_database(server, REMINDERS_DB)
+        finally:
+            server.close()
+
+
 @pytest.fixture(autouse=True)
-def _empty_tables(_test_database):
+def _empty_tables(_test_database, reminders_service, monkeypatch):
+    monkeypatch.setenv("REMINDERS_URL", reminders_service)
+    reminders = connect(REMINDERS_DB)
+    try:
+        reminders.execute("DELETE FROM reminders")
+        reminders.commit()
+    finally:
+        reminders.close()
     connection = connect()
     try:
         for table in TABLES:

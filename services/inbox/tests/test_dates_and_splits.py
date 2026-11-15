@@ -69,9 +69,11 @@ def test_a_remind_line_without_a_time_gets_one_from_the_text(tmp_path: Path) -> 
     assert sort_pending(connection, engine, NOW) == 2
     assert engine.notes[0].now == NOW.astimezone(ZoneInfo("Europe/Madrid"))
     listed = {item["id"]: item for item in list_items(connection, owner, zone=ZoneInfo("Europe/Madrid"))}
-    assert listed[unsorted]["status"] == "scheduled"
+    # The reminders service judges due or scheduled by its own clock, so the
+    # test checks the stored time, not the status.
+    assert listed[unsorted]["remind_at"] == SATURDAY_3PM.isoformat()
     assert listed[unsorted]["remind_label"] == "Sat 3 Oct, 15:00"
-    assert listed[filed]["status"] == "scheduled"
+    assert listed[filed]["remind_at"] == SATURDAY_3PM.isoformat()
     assert listed[filed]["folder_ids"] == [game]
     assert sort_pending(connection, engine, NOW) == 0
     connection.close()
@@ -93,7 +95,7 @@ def test_other_lines_with_a_time_only_get_a_suggestion(tmp_path: Path) -> None:
 
     assert accept_reminder(connection, owner, dentist, NOW) == SATURDAY_3PM
     item = list_items(connection, owner, query="saturday")[0]
-    assert (item["kind"], item["status"]) == ("reminder", "scheduled")
+    assert (item["kind"], item["remind_at"]) == ("reminder", SATURDAY_3PM.isoformat())
     with pytest.raises(LookupError):
         accept_reminder(connection, owner, dentist, NOW)
     connection.close()
@@ -181,7 +183,7 @@ def test_editing_a_line_into_a_timeless_reminder_reads_it_again(tmp_path: Path) 
     update_item(connection, owner, item_id, "remind call mom saturday 3pm", None, NOW)
     assert resort_if_waiting(connection, owner, item_id) is True
     sort_pending(connection, Answer(Suggestion(None, 0.0, remind_at=SATURDAY_3PM)), NOW)
-    assert list_items(connection, owner)[0]["status"] == "scheduled"
+    assert list_items(connection, owner)[0]["remind_at"] == SATURDAY_3PM.isoformat()
     connection.close()
 
 

@@ -16,21 +16,28 @@ from app.folders import (
     move_folder,
     rename_folder,
 )
+from app.images import (
+    MAX_BYTES,
+    PLACEHOLDER,
+    ImageError,
+    attach_image,
+    check_image,
+    image_for,
+    images_for,
+)
 from app.inbox import (
     count_by_folder,
     count_items,
     delete_item,
-    list_items,
-    set_folders,
-    save_item,
     item_kind,
+    list_items,
+    save_item,
+    set_folders,
     toggle_task,
     update_item,
 )
-from app.reminders import complete, snooze
-from app.sessions import COOKIE_NAME, read_user_id, sign_user_id
-from app.images import MAX_BYTES, PLACEHOLDER, ImageError, attach_image, check_image, image_for, images_for
 from app.links import previews_for
+from app.reminders_client import RemindersUnavailable, default_client
 from app.sorting import (
     accept_also,
     accept_proposal,
@@ -44,11 +51,18 @@ from app.sorting import (
     results_for,
     undo_auto_split,
 )
-from app.users import AccountError, authenticate, register_user, set_timezone, user_timezone
+from app.tokens import USER_LIFETIME_SECONDS, from_header, issue, verify
+from app.users import (
+    AccountError,
+    authenticate,
+    register_user,
+    set_timezone,
+    user_timezone,
+)
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
 STATIC = Path(__file__).with_name("static")
-SESSION_DAYS = 90
+COOKIE_NAME = "session"
 UNSORTED = "unsorted"
 
 
@@ -338,8 +352,8 @@ def register_routes(app: FastAPI) -> None:
             if kind == "task":
                 toggle_task(connection, user_id, item_id)
             elif kind == "reminder":
-                complete(connection, user_id, item_id, _now())
-        except LookupError:
+                default_client().complete(user_id, item_id)
+        except (LookupError, RemindersUnavailable):
             pass
         finally:
             connection.close()
@@ -350,13 +364,12 @@ def register_routes(app: FastAPI) -> None:
         user_id = _current_user(request)
         if user_id is None:
             return RedirectResponse("/login", status_code=303)
-        connection = connect()
+        # Snoozing is the reminders service's job alone; inbox only passes it on
+        # until the static UI calls reminders itself.
         try:
-            snooze(connection, user_id, item_id, _now())
-        except (LookupError, ValueError):
+            default_client().snooze(user_id, item_id)
+        except (LookupError, ValueError, RemindersUnavailable):
             pass
-        finally:
-            connection.close()
         return _inbox_redirect(q, folder)
 
     @app.post("/items/{item_id}/accept")
@@ -397,7 +410,7 @@ def register_routes(app: FastAPI) -> None:
         connection = connect()
         try:
             accept_reminder(connection, user_id, item_id, _now())
-        except (LookupError, ValueError, ClassificationError):
+        except (LookupError, ValueError, ClassificationError, RemindersUnavailable):
             pass
         finally:
             connection.close()
@@ -525,9 +538,7 @@ def _render_inbox(
         if folder_id is not None and current is None:
             folder_id = None
         zone = user_timezone(connection, user_id)
-        items = list_items(
-            connection, user_id, query, _now(), folder_id=folder_id, unsorted=unsorted, zone=zone
-        )
+        items = list_items(connection, user_id, query, folder_id=folder_id, unsorted=unsorted, zone=zone)
         results = results_for(connection, user_id)
         previews = previews_for(connection, user_id)
         pictures = images_for(connection, user_id)
@@ -592,6 +603,7 @@ def _render_inbox(
             "draft": draft or _draft("", "", "", False, ""),
             "query": query,
             "error": error,
+            "reminders_down": any(item["reminder_unavailable"] for item in items),
         },
         status_code=status_code,
     )
@@ -639,8 +651,8 @@ def _logged_in(user_id: int) -> RedirectResponse:
     # Android closes it.
     response.set_cookie(
         COOKIE_NAME,
-        sign_user_id(user_id),
-        max_age=SESSION_DAYS * 24 * 60 * 60,
+        issue(user_id, "user"),
+        max_age=USER_LIFETIME_SECONDS,
         httponly=True,
         samesite="lax",
     )
@@ -689,7 +701,11 @@ def _wake_sorter(request: Request) -> None:
 
 
 def _current_user(request: Request) -> int | None:
-    return read_user_id(request.cookies.get(COOKIE_NAME))
+    # The pages send the token in the cookie; the static UI will send the same
+    # token as `Authorization: Bearer`. Only the user scope logs a person in.
+    token = from_header(request.headers.get("authorization")) or request.cookies.get(COOKIE_NAME)
+    claims = verify(token)
+    return claims.user_id if claims is not None and claims.scope == "user" else None
 
 
 def _folder_id(value: str) -> int | None:
