@@ -13,11 +13,11 @@
 --   cannot index an expression, so parent_key is a computed column, and the
 --   default collation is already case-insensitive.
 --
--- TEMPORARY: the reminders table is still here because inbox code reads and
--- writes it directly until the reminders HTTP API exists (roadmap, Sat 14).
--- The reminders service has its own copy in services/reminders/migrations.
--- This file can still change until the first deploy (Tue 17); after that,
--- every change is a new numbered file.
+-- * The reminders table is in the reminders service's own database (ADR-6).
+--   items.needs_time is inbox's note that a reminder line still waits for a
+--   time, so the sorter finds such lines without asking reminders (ADR-7).
+-- This file can still change until the first deploy; after that, every change
+-- is a new numbered file.
 
 CREATE TABLE users (
     id INT IDENTITY(1, 1) PRIMARY KEY,
@@ -46,6 +46,7 @@ CREATE TABLE items (
     updated_at NVARCHAR(40) COLLATE Latin1_General_BIN2 NOT NULL,
     split_from INT NULL REFERENCES items(id),
     hidden INT NOT NULL DEFAULT 0,
+    needs_time INT NOT NULL DEFAULT 0 CHECK (needs_time IN (0, 1)),
     CONSTRAINT ck_items_only_tasks_done CHECK (kind = 'task' OR task_done = 0)
 );
 
@@ -79,15 +80,6 @@ CREATE TABLE item_tags (
     item_id INT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
     tag_id INT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
     PRIMARY KEY (item_id, tag_id)
-);
-
-CREATE TABLE reminders (
-    item_id INT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
-    remind_at NVARCHAR(40) COLLATE Latin1_General_BIN2 NOT NULL,
-    status NVARCHAR(10) NOT NULL CHECK (status IN ('scheduled', 'due', 'snoozed', 'done')),
-    snoozed_until NVARCHAR(40) COLLATE Latin1_General_BIN2 NULL,
-    repeat_daily INT NOT NULL DEFAULT 0 CHECK (repeat_daily IN (0, 1)),
-    repeat_until NVARCHAR(10) COLLATE Latin1_General_BIN2 NULL
 );
 
 CREATE TABLE sort_results (
@@ -129,4 +121,3 @@ CREATE INDEX idx_items_split_from ON items (split_from);
 CREATE INDEX idx_item_folders_folder ON item_folders (folder_id);
 CREATE INDEX idx_folders_parent ON folders (parent_id);
 CREATE UNIQUE INDEX idx_folders_sibling_name ON folders (user_id, parent_key, name);
-CREATE INDEX idx_reminders_due ON reminders (status, remind_at);

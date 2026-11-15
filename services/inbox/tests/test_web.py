@@ -80,9 +80,7 @@ def test_the_date_picker_is_read_in_the_browser_timezone(tmp_path: Path, monkeyp
         page = client.get("/inbox")
         assert "Sat 5 Dec, 15:00" in page.text
 
-        from app.db import connect
+        from app.reminders_client import default_client
 
-        connection = connect()
-        stored = connection.execute("SELECT remind_at FROM reminders").fetchone()["remind_at"]
-        connection.close()
+        stored = default_client().for_user(1)[1]["remind_at"]
         assert stored.startswith("2026-12-05T14:00:00")

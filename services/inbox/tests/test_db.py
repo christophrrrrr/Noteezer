@@ -22,7 +22,6 @@ def test_migration_creates_every_table() -> None:
         "folder_checks",
         "tags",
         "item_tags",
-        "reminders",
         "sort_results",
         "link_previews",
         "images",
@@ -54,19 +53,6 @@ def test_note_cannot_be_marked_done() -> None:
     connection.close()
 
 
-def test_one_reminder_row_per_item() -> None:
-    connection = connect()
-    connection.execute(USER, ("a@example.com", "hash", STAMP))
-    connection.execute(
-        "INSERT INTO items (user_id, body, kind, created_at, updated_at) VALUES (1, 'call landlord', 'reminder', ?, ?)",
-        (STAMP, STAMP),
-    )
-    connection.execute("INSERT INTO reminders (item_id, remind_at, status) VALUES (1, ?, 'scheduled')", (STAMP,))
-    with pytest.raises(IntegrityError):
-        connection.execute("INSERT INTO reminders (item_id, remind_at, status) VALUES (1, ?, 'scheduled')", (STAMP,))
-    connection.close()
-
-
 def test_tag_name_is_unique_per_user_only() -> None:
     connection = connect()
     connection.execute(USER, ("a@example.com", "hash", STAMP))
@@ -75,19 +61,6 @@ def test_tag_name_is_unique_per_user_only() -> None:
     connection.execute("INSERT INTO tags (user_id, name) VALUES (2, 'groceries')")
     with pytest.raises(IntegrityError):
         connection.execute("INSERT INTO tags (user_id, name) VALUES (1, 'groceries')")
-    connection.close()
-
-
-def test_deleting_an_item_removes_its_reminder() -> None:
-    connection = connect()
-    connection.execute(USER, ("a@example.com", "hash", STAMP))
-    connection.execute(
-        "INSERT INTO items (user_id, body, kind, created_at, updated_at) VALUES (1, 'call landlord', 'reminder', ?, ?)",
-        (STAMP, STAMP),
-    )
-    connection.execute("INSERT INTO reminders (item_id, remind_at, status) VALUES (1, ?, 'scheduled')", (STAMP,))
-    connection.execute("DELETE FROM items WHERE id = 1")
-    assert connection.execute("SELECT COUNT(*) AS n FROM reminders").fetchone()["n"] == 0
     connection.close()
 
 
