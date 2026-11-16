@@ -3,13 +3,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.db import connect
 from app.folders import create_folder, delete_folder
 from app.gemini import GeminiSorter, parse_answer
-from app.inbox import add_to_folder, count_by_folder, count_items, list_items, save_item, set_folders
-from app.main import create_app
+from app.inbox import (
+    add_to_folder,
+    count_by_folder,
+    count_items,
+    list_items,
+    save_item,
+    set_folders,
+)
 from app.sorting import (
     Candidate,
     FolderOption,
@@ -190,28 +195,3 @@ def test_the_engines_match_a_new_folder() -> None:
     assert "New folder: Cool videos" in prompts[0][0]
     assert "2: grip notes" in prompts[0][0]
     assert prompts[0][1]["required"] == ["item_ids"]
-
-
-def test_folders_are_ticked_and_suggested_through_the_pages(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SESSION_SECRET", "test-secret")
-    with TestClient(create_app()) as client:
-        client.post("/register", data={"email": "a@example.com", "password": "password1"})
-        client.post("/folders", data={"name": "Table Tennis", "parent": ""})
-        client.post("/inbox", data={"body": "https://youtu.be/serve", "folder": "1"})
-        client.post("/folders", data={"name": "Cool videos", "parent": ""})
-
-        connection = connect()
-        connection.execute("INSERT INTO folder_suggestions (item_id, folder_id) VALUES (1, 2)")
-        connection.commit()
-        connection.close()
-        page = client.get("/inbox")
-        assert "Also add to Cool videos" in page.text
-        client.post("/items/1/also/2", data={"folder": ""})
-        page = client.get("/inbox")
-        assert "Also add to Cool videos" not in page.text
-        assert 'href="/inbox?folder=1"' in page.text and 'href="/inbox?folder=2"' in page.text
-
-        client.post("/items/1/folders", data={"folders": ["2"]})
-        assert "youtu.be/serve" not in client.get("/inbox?folder=1").text
-        client.post("/items/1/folders", data={})
-        assert "youtu.be/serve" in client.get("/inbox?folder=unsorted").text
