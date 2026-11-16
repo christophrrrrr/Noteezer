@@ -33,26 +33,56 @@ One person who currently pastes notes into a chat with themselves and later sear
 - Note, Idea, Task, Link, and Reminder buttons override that guess.
 - The kind is separate from the folder. Saving while a folder is open puts the line in that folder. Otherwise it goes to Unsorted.
 
-Without Gemini, times come only from the picker. With Gemini, a line that starts with `remind` can be saved without the picker: "remind me friday 3pm call mom" is scheduled once the sorter has read it, and until then it shows "no time yet". Other lines with a time, like "dentist tuesday 10:00", get a "Remind me Tue 6 Oct, 10:00" button instead of a reminder. Every form sends the browser's timezone, which is stored on the account, so the picker and phrases like "friday" are read in the user's time. The server's own clock is UTC once deployed.
+Without Gemini, times come only from the picker. With Gemini, a line that starts with `remind` can be saved without the picker: "remind me friday 3pm call mom" is scheduled once the sorter has read it, and until then it shows "no time yet". Other lines with a time, like "dentist tuesday 10:00", get a "Remind me Tue 6 Oct, 10:00" button instead of a reminder. The UI sends the browser's timezone when you log in and each time it opens, and it is stored on the account, so the picker and phrases like "friday" are read in the user's time. The server's own clock is UTC once deployed.
 
 ## In this assignment
 
-- One process, Python, FastAPI, server-rendered pages, SQLite.
+- Two services in Python with FastAPI, inbox and reminders, each with its own SQL Server database (ADR-6, ADR-7). Azure SQL once deployed.
+- A static UI in `ui/`: plain HTML, CSS, and JavaScript with no build step, calling both services with a bearer token (ADR-8).
 - Due reminders appear at the top when you open the app. Snooze and done are supported.
-- A dark page in the style of Notion. Folders are in a sidebar, which becomes a drawer on a phone. Notes run from oldest to newest like a chat, with the newest just above the capture bar and due reminders pinned on top. Styles and a small script are in `services/inbox/app/static`. Every button is a normal form, so the app also works without the script.
+- A dark page in the style of Notion. Folders are in a sidebar, which becomes a drawer on a phone. Notes run from oldest to newest like a chat, with the newest just above the capture bar and due reminders pinned on top.
 - Minimal accounts: register, log in, and log out with email and password. Not a third feature domain.
 
 ## Left for later
 
-**Running without the laptop is the biggest gap.** Noteezer works only while `python app.py` runs on the computer that hosts it, and the phone reaches it through Tailscale. When that computer is off or asleep, the phone app shows its offline page, nothing can be saved, and nothing is sorted. This assignment does not allow a real public deployment, so always-on hosting comes with Assignment 2, when the app is put in a container and deployed to Azure. Because the app is configured only through `PORT`, `DATA_DIR`, and the other variables above, that move needs no code changes.
+**Running without the laptop is the biggest gap, and the Azure deployment is what closes it.** Until it is live, Noteezer runs only where `docker compose up` runs. Both services are configured only through the environment variables below, so the move to Azure needs no code changes.
 
 Push notifications to the phone are not built (ADR-5). The in-process background task could send them, but a reminder would only arrive while the computer running Noteezer is on, so they also wait for the always-on deployment. Until then, due reminders are pinned at the top when the app is opened. Also out of scope: chat import, offline mode, sharing items with other people, and video files (a video link is understood from its title).
 
 ## Run
 
-Noteezer is two services (ADR-6, ADR-7). **inbox** (`services/inbox`, port 8000) has the pages, accounts, lines, folders, sorting, images, and link previews. **reminders** (`services/reminders`, port 8001) stores reminder times and decides when one is due; it has a JSON API and no pages. Each has its own database. Inbox calls reminders over HTTP with a 2 second timeout, and keeps working without times when reminders is down.
+Noteezer is a static UI and two services (ADR-6, ADR-7, ADR-8). **inbox** (`services/inbox`, port 8000) is a JSON API under `/api` for accounts, lines, folders, sorting, images, and link previews. **reminders** (`services/reminders`, port 8001) stores reminder times and decides when one is due. Each has its own database. The **UI** (`ui/`, port 8080) is plain files that call both: inbox for everything, and reminders directly for done and snooze. Inbox calls reminders over HTTP with a 2 second timeout, and keeps working without times when reminders is down.
 
-It needs a SQL Server. Locally that is a container (Docker Desktop has to be running). Choose a password of your own (at least 8 characters with upper case, lower case, and digits; SQL Server refuses weaker ones) and never commit it. In PowerShell:
+### Everything at once, with Docker
+
+Docker Desktop has to be running. Copy `.env.example` to `.env` (git ignores it) and fill in `DB_PASSWORD` (8+ characters with upper case, lower case, digits, and a symbol; SQL Server refuses weaker ones) and `SESSION_SECRET` (`python -c "import secrets; print(secrets.token_hex(32))"` makes one). Then:
+
+```
+docker compose up --build
+```
+
+Open `http://localhost:8080`. Compose starts SQL Server, waits until it answers, runs `db/init.sql` once to create the two databases, starts reminders and inbox (each applies its own migrations), and serves `ui/` with nginx. nginx writes `config.js` from `INBOX_URL` and `REMINDERS_URL` and sends a Content-Security-Policy that only lets the page call those two addresses. Only ports 8080, 8000, and 8001 are published, all on `127.0.0.1`; the database is reachable only from the other containers. `docker compose down` stops everything and keeps the data; `docker compose down -v` deletes it too.
+
+If an antivirus or a company proxy re-signs HTTPS on your computer (Norton does), `pip install` inside the image build fails with `CERTIFICATE_VERIFY_FAILED`. Export that root certificate as a PEM file outside the repo and add a git-ignored `docker-compose.override.yml`:
+
+```
+services:
+  inbox:
+    build:
+      secrets: [extra_ca]
+  reminders:
+    build:
+      secrets: [extra_ca]
+secrets:
+  extra_ca:
+    file: C:/path/to/your-root-ca.pem
+```
+
+The Dockerfiles use it only for the `pip install` step, so it never lands in an image.
+
+### One service at a time, for development and tests
+
+The tests and a service started by hand need a SQL Server. Locally that is a container (Docker Desktop has to be running). Choose a password of your own (at least 8 characters with upper case, lower case, and digits; SQL Server refuses weaker ones) and never commit it. In PowerShell:
 
 ```
 $env:DB_PASSWORD = "<your password>"
@@ -74,7 +104,7 @@ DB_NAME=noteezer_reminders
 SESSION_SECRET=<the same long random value>
 ```
 
-Then start each service in its own terminal:
+Add `CORS_ORIGINS=http://localhost:8080` to both files so the UI may call them. Then start each service in its own terminal, and serve the UI from a third (its `config.js` already points at ports 8000 and 8001):
 
 ```
 cd services\reminders
@@ -88,6 +118,8 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 python -m app
+
+python -m http.server 8080 -d ui
 ```
 
 Each process listens on `0.0.0.0`. On start it applies the numbered SQL files in its `migrations` folder that its database has not seen yet, each once and in its own transaction, and records them in `schema_migrations`. `python -m app.migrate` does the same by hand. A file that was applied is never edited; a change is a new, higher number. Both services log one line per request with a request id; inbox passes the id on to reminders in `X-Request-ID`, so one id finds a request in both logs. `GET /health` on either answers `{"ok": true, "database": "up"}`, or 503 when its database cannot be reached. Everything else is configured with environment variables:
@@ -101,7 +133,7 @@ Each process listens on `0.0.0.0`. On start it applies the numbered SQL files in
 | `DB_PASSWORD` | empty | Password for that login. Required. |
 | `DB_NAME` | none | Required. The service's own database. It must exist; the migrations create the tables in it. |
 | `SESSION_SECRET` | none | Required, the same in both services. Signs and checks the login token (ADR-7). |
-| `CORS_ORIGINS` | empty | Both. Comma-separated sites allowed to call the service from a browser, like the UI's address. Empty allows none. |
+| `CORS_ORIGINS` | empty | Both. Comma-separated sites allowed to call the service from a browser: the UI's address, `http://localhost:8080` locally. Empty allows none. |
 | `REMINDERS_URL` | `http://127.0.0.1:8001` | Inbox only. Where the reminders service is. |
 | `REMINDERS_TIMEOUT` | `2` | Inbox only. Seconds to wait for reminders before carrying on without times. |
 | `GEMINI_API_KEY` | not set | Inbox only. Turns on Gemini sorting. Without it the rules sort and the app works the same otherwise. |
@@ -113,35 +145,26 @@ Variables already set in the environment win over the `.env` file. `GEMINI_API_K
 
 The architecture and database diagrams are in [docs/diagrams.md](docs/diagrams.md).
 
-Open `http://127.0.0.1:8000/register`, create an account, and save a line. A line that starts with `todo` or `buy` becomes a task, a URL becomes a link, and `remind` or the Reminder choice becomes a reminder that needs the date picker. Check Every day to repeat it, and set the date field only if it should stop. A reminder time that is already past is marked due and listed first. `#words` become tags.
+Open `http://localhost:8080`, create an account, and save a line. A line that starts with `todo` or `buy` becomes a task, a URL becomes a link, and `remind` or the Reminder choice becomes a reminder that needs the date picker. Check Every day to repeat it, and set the date field only if it should stop. A reminder time that is already past is marked due and listed first. `#words` become tags.
 
 ## Use it on your phone
 
-Noteezer installs as an app on Android (Chrome) and iPhone (Safari, Add to Home Screen). Installing and sharing need HTTPS, and the easiest private way to get it is [Tailscale](https://tailscale.com), which is free for personal use:
+Noteezer installs as an app on Android (Chrome) and iPhone (Safari, Add to Home Screen). Installing and sharing need HTTPS. In Assignment 1 that came from `tailscale serve` on the laptop; with a separate UI and two services that is three addresses, so the phone uses the Azure address once Noteezer is deployed there. Open it, log in, and in Chrome choose Install app (or Add to Home screen). On Android, Noteezer then appears in the share sheet: sharing a YouTube video, a page, or a screenshot saves it to Unsorted, where it is sorted like any other line.
 
-1. Install Tailscale on the computer running Noteezer and on the phone, and sign in to both with the same account. In the Tailscale admin console, under DNS, turn on MagicDNS and HTTPS Certificates.
-2. Start both services with `python -m app` (in `services/reminders` and in `services/inbox`), then in another terminal run:
+The app is a manifest (`ui/manifest.webmanifest`) and a service worker (`ui/sw.js`). The worker caches only the page, styles, script, and icons, and shows an offline page when nothing can be reached. It never touches calls to the services, so notes and images are never cached on the phone. The share sheet posts to `/share` on the UI's address; the worker keeps that post and opens the app, which sends it to inbox with the token. The token lasts 90 days, so the installed app stays signed in. Logging out makes the browser forget it (ADR-8).
 
-   ```
-   tailscale serve --bg 8000
-   ```
+## Tests
 
-   It prints an address like `https://your-computer.your-tailnet.ts.net`. Only your own devices can open it. `tailscale serve reset` stops it.
-3. Open that address on the phone and log in. In Chrome, open the menu and choose Install app (or Add to Home screen).
-4. On Android, Noteezer now appears in the share sheet. Sharing a YouTube video, a page, or a screenshot saves it to Unsorted, where it is sorted like any other line.
-
-The app is a manifest (`services/inbox/app/static/manifest.webmanifest`) and a service worker (`services/inbox/app/static/sw.js`). The worker caches only the styles, script, and icons, and shows an offline page when the server cannot be reached. Notes and images are never cached on the phone. The login cookie lasts 90 days, so the installed app stays signed in.
-
-Each service has its own tests. They never call Gemini or fetch real pages; they use fakes. They do run against a real SQL Server, the container above: each run creates fresh test databases, migrates them, empties them before every test, and drops them at the end. `DB_SERVER`, `DB_PORT`, `DB_USER`, and `DB_PASSWORD` point at the server, read from the environment or the service's `.env`; without `DB_PASSWORD` the run stops with a message. The tests set their own `SESSION_SECRET`.
+Each service has its own tests. They never call Gemini or fetch real pages; they use fakes. They do run against a real SQL Server, the container from the section above: each run creates fresh test databases, migrates them, empties them before every test, and drops them at the end. `DB_SERVER`, `DB_PORT`, `DB_USER`, and `DB_PASSWORD` point at the server, read from the environment or the service's `.env`; without `DB_PASSWORD` the run stops with a message. The tests set their own `SESSION_SECRET`.
 
 The inbox tests start the real reminders service as a second process, on a free port with its own test database, so every reminder an inbox test saves crosses the seam over real HTTP. `tests/test_seam.py` also points inbox at a reminders that is down, slow, or answering with errors:
 
 ```
 cd services\inbox
-pytest --cov=app.classify --cov=app.inbox --cov=app.users --cov=app.passwords --cov=app.folders --cov=app.sorting --cov=app.links --cov=app.gemini --cov=app.images --cov=app.db --cov=app.migrate --cov=app.tokens --cov=app.reminders_client --cov=app.middleware --cov-report=term-missing
+pytest --cov=app.api --cov=app.classify --cov=app.inbox --cov=app.users --cov=app.passwords --cov=app.folders --cov=app.sorting --cov=app.links --cov=app.gemini --cov=app.images --cov=app.db --cov=app.migrate --cov=app.tokens --cov=app.reminders_client --cov=app.middleware --cov-report=term-missing
 
 cd services\reminders
 pytest --cov=app --cov-report=term-missing
 ```
 
-Inbox is 121 tests at 96% of those modules. Reminders is 23 tests at 88% of the whole service, with the rules (`reminders.py`) and tokens at 100%.
+Inbox is 128 tests at 97% of those modules. `tests/test_api.py` drives the JSON API the UI uses, including that one person never reaches another's lines, and `tests/test_ui_files.py` checks the UI's files without a browser: the manifest and icons, that every file the page loads exists, that the page has no inline script, and that note text never becomes HTML. Reminders is 23 tests at 88% of the whole service, with the rules (`reminders.py`) and tokens at 100%.
