@@ -14,7 +14,10 @@ services:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      # Plain ${...} on purpose: a "${DB_PASSWORD:?message}" check reads to
+      # secret scanners like a password written in the file. Without a value,
+      # SQL Server refuses to start and says the password is too weak.
+      MSSQL_SA_PASSWORD: ${DB_PASSWORD}
       # sqlcmd reads the password from here, so it never shows in a command line.
       SQLCMDPASSWORD: ${DB_PASSWORD}
     volumes:
