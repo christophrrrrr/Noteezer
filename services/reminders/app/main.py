@@ -9,15 +9,33 @@ items exist and who owns them (ADR-7).
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import middleware
 from app.db import Connection, DatabaseError, connect
 from app.migrate import check_read_write, migrate
 from app.reminders import ReminderExists, complete, list_for, remove, schedule, snooze
 from app.tokens import Claims, from_header, verify
+
+
+class Reminder(BaseModel):
+    item_id: int
+    remind_at: str = Field(description="ISO 8601 time in UTC.")
+    status: Literal["scheduled", "due", "snoozed", "done"]
+    snoozed_until: str | None = Field(description="ISO 8601 time in UTC while snoozed.")
+    repeat_daily: bool
+    repeat_until: str | None = Field(description="Last day of a daily reminder, YYYY-MM-DD.")
+
+
+class Problem(BaseModel):
+    detail: str
+
+
+def problems(*codes: int) -> dict:
+    return {code: {"model": Problem} for code in codes}
 
 
 class ReminderTime(BaseModel):
@@ -66,23 +84,23 @@ def create_app(run_migrations: bool = True) -> FastAPI:
 
     middleware.health_route(app, connect, check_read_write, (DatabaseError,))
 
-    @app.get("/reminders")
+    @app.get("/reminders", responses=problems(401))
     def list_reminders(
         item_id: list[int] = Query(default=[]),
         claims: Claims = Depends(caller),
         connection: Connection = Depends(database),
         moment: datetime = Depends(now),
-    ) -> list[dict]:
+    ) -> list[Reminder]:
         return list_for(connection, claims.user_id, moment, item_id or None)
 
-    @app.put("/reminders/{item_id}")
+    @app.put("/reminders/{item_id}", responses=problems(400, 401, 403, 404, 409))
     def set_time(
         item_id: int,
         body: ReminderTime,
         claims: Claims = Depends(inbox_only),
         connection: Connection = Depends(database),
         moment: datetime = Depends(now),
-    ) -> dict:
+    ) -> Reminder:
         try:
             return schedule(
                 connection,
@@ -101,7 +119,7 @@ def create_app(run_migrations: bool = True) -> FastAPI:
         except ValueError as error:
             raise HTTPException(400, str(error)) from None
 
-    @app.delete("/reminders/{item_id}", status_code=204)
+    @app.delete("/reminders/{item_id}", status_code=204, responses=problems(401, 403))
     def delete_reminder(
         item_id: int,
         claims: Claims = Depends(inbox_only),
@@ -111,25 +129,25 @@ def create_app(run_migrations: bool = True) -> FastAPI:
         remove(connection, claims.user_id, item_id)
         return Response(status_code=204)
 
-    @app.post("/reminders/{item_id}/done")
+    @app.post("/reminders/{item_id}/done", responses=problems(401, 404))
     def mark_done(
         item_id: int,
         claims: Claims = Depends(caller),
         connection: Connection = Depends(database),
         moment: datetime = Depends(now),
-    ) -> dict:
+    ) -> Reminder:
         try:
             return complete(connection, claims.user_id, item_id, moment)
         except LookupError:
             raise HTTPException(404, "reminder not found") from None
 
-    @app.post("/reminders/{item_id}/snooze")
+    @app.post("/reminders/{item_id}/snooze", responses=problems(401, 404, 409))
     def snooze_reminder(
         item_id: int,
         claims: Claims = Depends(caller),
         connection: Connection = Depends(database),
         moment: datetime = Depends(now),
-    ) -> dict:
+    ) -> Reminder:
         try:
             return snooze(connection, claims.user_id, item_id, moment)
         except LookupError:

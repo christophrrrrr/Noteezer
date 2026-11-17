@@ -126,7 +126,13 @@ def reminders_service(tmp_path_factory):
     process = subprocess.Popen(
         [sys.executable, "-m", "app"],
         cwd=REMINDERS_DIR,
-        env={**os.environ, "DATABASE_URL": database_url(REMINDERS_DB), "PORT": str(port)},
+        # Without pytest-cov's variables: the reminders code is measured by
+        # its own tests, not counted as inbox's.
+        env={
+            **{name: value for name, value in os.environ.items() if not name.startswith("COV_CORE_")},
+            "DATABASE_URL": database_url(REMINDERS_DB),
+            "PORT": str(port),
+        },
         stdout=log_file,
         stderr=subprocess.STDOUT,
     )

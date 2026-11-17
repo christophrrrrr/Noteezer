@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "system.schema.json",
+  "title": "Noteezer system description",
+  "$comment": "Written from the example and rules in the Assignment 2 brief, section 8a, because the provided file was not found. Replace it with the course's file if that turns up; system.yaml follows the same fields.",
+  "type": "object",
+  "required": ["student", "prefix", "public_url", "ui", "azure", "services"],
+  "additionalProperties": false,
+  "properties": {
+    "student": {
+      "description": "IE username, the part of the email before @.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)*$"
+    },
+    "prefix": {
+      "description": "The username with dots replaced by hyphens; every Azure resource starts with it.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "public_url": {
+      "description": "The storage account's static website endpoint.",
+      "type": "string",
+      "pattern": "^https://[a-z0-9]+\\.z[0-9]+\\.web\\.core\\.windows\\.net/?$"
+    },
+    "ui": {
+      "type": "object",
+      "required": ["path", "storage_account", "calls"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "storage_account": { "type": "string", "pattern": "^[a-z0-9]{3,24}$" },
+        "calls": {
+          "description": "Services the browser calls directly.",
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "azure": {
+      "type": "object",
+      "required": ["resource_group", "container_apps_environment", "sql_server", "registry"],
+      "additionalProperties": false,
+      "properties": {
+        "resource_group": { "type": "string", "pattern": "^rg-" },
+        "container_apps_environment": { "type": "string" },
+        "sql_server": { "type": "string" },
+        "registry": { "type": "string" }
+      }
+    },
+    "services": {
+      "description": "Exactly two domain services.",
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "additionalProperties": { "$ref": "#/$defs/service" }
+    }
+  },
+  "$defs": {
+    "service": {
+      "type": "object",
+      "required": ["description", "path", "openapi", "port_default", "health", "migrations", "env", "calls", "azure"],
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string" },
+        "path": { "type": "string", "pattern": "^services/" },
+        "openapi": { "type": "string", "pattern": "\\.(yaml|json)$" },
+        "port_default": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "health": { "type": "string", "pattern": "^/" },
+        "migrations": { "type": "string" },
+        "env": {
+          "description": "Every environment variable the service reads.",
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/variable" }
+        },
+        "calls": {
+          "description": "Calls this service makes to the other one.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/call" }
+        },
+        "azure": {
+          "type": "object",
+          "required": ["container_app", "sql_database"],
+          "additionalProperties": false,
+          "properties": {
+            "container_app": { "type": "string" },
+            "sql_database": { "type": "string" }
+          }
+        }
+      }
+    },
+    "variable": {
+      "type": "object",
+      "required": ["description"],
+      "additionalProperties": false,
+      "properties": {
+        "default": { "type": ["string", "number", "boolean"] },
+        "secret": { "type": "boolean" },
+        "description": { "type": "string" }
+      },
+      "$comment": "Secrets have no default.",
+      "if": { "properties": { "secret": { "const": true } }, "required": ["secret"] },
+      "then": { "not": { "required": ["default"] } }
+    },
+    "call": {
+      "type": "object",
+      "required": ["service", "url_env", "endpoints", "timeout_s", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "service": { "type": "string" },
+        "url_env": { "type": "string" },
+        "endpoints": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^(GET|POST|PUT|PATCH|DELETE) /" }
+        },
+        "timeout_s": { "type": "number", "exclusiveMinimum": 0 },
+        "on_failure": { "type": "string" }
+      }
+    }
+  }
+}

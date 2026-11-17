@@ -12,6 +12,7 @@ for those itself (ADR-7). Inbox only toggles tasks.
 from datetime import date, datetime, timezone, tzinfo
 
 from fastapi import (
+    APIRouter,
     Depends,
     FastAPI,
     File,
@@ -21,6 +22,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from app.classify import ClassificationError
@@ -68,7 +70,7 @@ from app.sorting import (
     results_for,
     undo_auto_split,
 )
-from app.tokens import from_header, issue, verify
+from app.tokens import issue, verify
 from app.users import (
     AccountError,
     authenticate,
@@ -124,15 +126,35 @@ class Created(BaseModel):
     id: int
 
 
-def current_user(request: Request) -> int:
-    claims = verify(from_header(request.headers.get("authorization")))
+class Problem(BaseModel):
+    """Every error: a sentence the UI can show as it is."""
+
+    detail: str
+
+
+PROBLEM = {"model": Problem}
+NOT_FOUND = {404: {"model": Problem, "description": "No such line or folder for this account."}}
+UNAVAILABLE = {503: {"model": Problem, "description": "The reminders service did not answer in time."}}
+
+
+# Declares the bearer token in the OpenAPI document. auto_error is off so a
+# missing token gets the same 401 as a wrong one.
+BEARER = HTTPBearer(auto_error=False, description="The token from /api/register or /api/login.")
+
+
+def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(BEARER)) -> int:
+    claims = verify(credentials.credentials if credentials else None)
     if claims is None or claims.scope != "user":
         raise HTTPException(401, "Log in again.", headers={"WWW-Authenticate": "Bearer"})
     return claims.user_id
 
 
 def register_routes(app: FastAPI) -> None:
-    @app.post("/api/register", status_code=201, tags=["account"])
+    # Every route can answer 400 (bad input) and 401 (no or expired token; a
+    # wrong password on login). Routes on one line or folder add 404.
+    router = APIRouter(responses={400: PROBLEM, 401: PROBLEM})
+
+    @router.post("/api/register", status_code=201, tags=["account"])
     def register(body: Credentials) -> Token:
         connection = connect()
         try:
@@ -144,7 +166,7 @@ def register_routes(app: FastAPI) -> None:
             connection.close()
         return Token(token=issue(user_id, "user"))
 
-    @app.post("/api/login", tags=["account"])
+    @router.post("/api/login", tags=["account"])
     def login(body: Credentials) -> Token:
         connection = connect()
         try:
@@ -157,7 +179,7 @@ def register_routes(app: FastAPI) -> None:
             raise HTTPException(401, "Email or password is wrong.")
         return Token(token=issue(user_id, "user"))
 
-    @app.put("/api/me/timezone", status_code=204, tags=["account"])
+    @router.put("/api/me/timezone", status_code=204, tags=["account"])
     def change_timezone(body: Zone, user_id: int = Depends(current_user)) -> Response:
         # The UI sends the browser's zone when it opens, so the account follows
         # the person when they travel. An unknown name keeps the stored one.
@@ -168,7 +190,7 @@ def register_routes(app: FastAPI) -> None:
             connection.close()
         return Response(status_code=204)
 
-    @app.get("/api/folders", tags=["folders"])
+    @router.get("/api/folders", tags=["folders"])
     def folders(user_id: int = Depends(current_user)) -> dict:
         connection = connect()
         try:
@@ -181,7 +203,7 @@ def register_routes(app: FastAPI) -> None:
             entry["count"] = counts.get(entry["id"], 0)
         return {"folders": entries, "unsorted_count": counts.get(None, 0), "total_count": total}
 
-    @app.get("/api/items", tags=["items"])
+    @router.get("/api/items", tags=["items"], responses=NOT_FOUND)
     def items(q: str = "", folder: str = "", user_id: int = Depends(current_user)) -> dict:
         # folder is "" for everything, "unsorted", or a folder id.
         unsorted = folder == UNSORTED
@@ -212,7 +234,7 @@ def register_routes(app: FastAPI) -> None:
             "reminders_down": any(item["reminder_unavailable"] for item in listed),
         }
 
-    @app.post("/api/items", status_code=201, tags=["items"])
+    @router.post("/api/items", status_code=201, tags=["items"])
     def create_item(
         request: Request,
         body: str = Form(""),
@@ -253,7 +275,13 @@ def register_routes(app: FastAPI) -> None:
         _wake_sorter(request)
         return Created(id=item_id)
 
-    @app.post("/api/share", tags=["items"], responses={204: {"description": "Nothing was shared."}})
+    @router.post(
+        "/api/share",
+        status_code=201,
+        tags=["items"],
+        response_model=Created,
+        responses={204: {"description": "Nothing was shared."}},
+    )
     def share(
         request: Request,
         title: str = Form(""),
@@ -283,7 +311,7 @@ def register_routes(app: FastAPI) -> None:
         _wake_sorter(request)
         return Response(status_code=201, content=Created(id=item_id).model_dump_json(), media_type="application/json")
 
-    @app.get("/api/items/{item_id}/image", tags=["items"], response_class=Response)
+    @router.get("/api/items/{item_id}/image", tags=["items"], response_class=Response, responses=NOT_FOUND)
     def item_image(item_id: int, user_id: int = Depends(current_user)) -> Response:
         connection = connect()
         try:
@@ -300,7 +328,7 @@ def register_routes(app: FastAPI) -> None:
             headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400"},
         )
 
-    @app.put("/api/items/{item_id}", status_code=204, tags=["items"])
+    @router.put("/api/items/{item_id}", status_code=204, tags=["items"], responses=NOT_FOUND)
     def edit_item(item_id: int, body: ItemEdit, request: Request, user_id: int = Depends(current_user)) -> Response:
         connection = connect()
         try:
@@ -325,18 +353,18 @@ def register_routes(app: FastAPI) -> None:
         _wake_sorter(request)
         return Response(status_code=204)
 
-    @app.delete("/api/items/{item_id}", status_code=204, tags=["items"])
+    @router.delete("/api/items/{item_id}", status_code=204, tags=["items"], responses=NOT_FOUND)
     def remove_item(item_id: int, user_id: int = Depends(current_user)) -> Response:
         _run(lambda connection: delete_item(connection, user_id, item_id))
         return Response(status_code=204)
 
-    @app.put("/api/items/{item_id}/folders", status_code=204, tags=["items"])
+    @router.put("/api/items/{item_id}/folders", status_code=204, tags=["items"], responses=NOT_FOUND)
     def item_folders(item_id: int, body: FolderIds, user_id: int = Depends(current_user)) -> Response:
         # The line ends up in exactly these folders, or in Unsorted when empty.
         _run(lambda connection: set_folders(connection, user_id, item_id, body.folder_ids))
         return Response(status_code=204)
 
-    @app.post("/api/items/{item_id}/toggle", tags=["items"])
+    @router.post("/api/items/{item_id}/toggle", tags=["items"], responses=NOT_FOUND)
     def toggle(item_id: int, user_id: int = Depends(current_user)) -> dict:
         def flip(connection):
             if item_kind(connection, user_id, item_id) != "task":
@@ -345,22 +373,22 @@ def register_routes(app: FastAPI) -> None:
 
         return {"task_done": _run(flip)}
 
-    @app.post("/api/items/{item_id}/also/{folder_id}", status_code=204, tags=["sorting"])
+    @router.post("/api/items/{item_id}/also/{folder_id}", status_code=204, tags=["sorting"], responses=NOT_FOUND)
     def add_suggested_folder(item_id: int, folder_id: int, user_id: int = Depends(current_user)) -> Response:
         _run(lambda connection: accept_also(connection, user_id, item_id, folder_id))
         return Response(status_code=204)
 
-    @app.delete("/api/items/{item_id}/also/{folder_id}", status_code=204, tags=["sorting"])
+    @router.delete("/api/items/{item_id}/also/{folder_id}", status_code=204, tags=["sorting"], responses=NOT_FOUND)
     def dismiss_suggested_folder(item_id: int, folder_id: int, user_id: int = Depends(current_user)) -> Response:
         _run(lambda connection: dismiss_also(connection, user_id, item_id, folder_id))
         return Response(status_code=204)
 
-    @app.post("/api/items/{item_id}/accept", status_code=204, tags=["sorting"])
+    @router.post("/api/items/{item_id}/accept", status_code=204, tags=["sorting"], responses=NOT_FOUND)
     def accept_item(item_id: int, user_id: int = Depends(current_user)) -> Response:
         _run(lambda connection: accept_suggestion(connection, user_id, item_id))
         return Response(status_code=204)
 
-    @app.post("/api/items/{item_id}/create-folder", status_code=204, tags=["sorting"])
+    @router.post("/api/items/{item_id}/create-folder", status_code=204, tags=["sorting"], responses=NOT_FOUND)
     def create_proposed_folder(item_id: int, request: Request, user_id: int = Depends(current_user)) -> Response:
         def create(connection):
             accept_proposal(connection, user_id, item_id, _now())
@@ -370,7 +398,7 @@ def register_routes(app: FastAPI) -> None:
         _wake_sorter(request)
         return Response(status_code=204)
 
-    @app.post("/api/items/{item_id}/remind", status_code=204, tags=["sorting"])
+    @router.post("/api/items/{item_id}/remind", status_code=204, tags=["sorting"], responses=NOT_FOUND | UNAVAILABLE)
     def set_suggested_reminder(item_id: int, user_id: int = Depends(current_user)) -> Response:
         try:
             _run(lambda connection: accept_reminder(connection, user_id, item_id, _now()))
@@ -378,18 +406,18 @@ def register_routes(app: FastAPI) -> None:
             raise HTTPException(503, "Reminders are unavailable right now. Try again in a moment.") from None
         return Response(status_code=204)
 
-    @app.post("/api/items/{item_id}/unsplit", status_code=204, tags=["sorting"])
+    @router.post("/api/items/{item_id}/unsplit", status_code=204, tags=["sorting"], responses=NOT_FOUND)
     def undo_split_route(item_id: int, user_id: int = Depends(current_user)) -> Response:
         _run(lambda connection: undo_auto_split(connection, user_id, item_id))
         return Response(status_code=204)
 
-    @app.post("/api/sorting/retry", status_code=204, tags=["sorting"])
+    @router.post("/api/sorting/retry", status_code=204, tags=["sorting"])
     def sort_again(request: Request, user_id: int = Depends(current_user)) -> Response:
         _run(lambda connection: requeue_unsorted(connection, user_id))
         _wake_sorter(request)
         return Response(status_code=204)
 
-    @app.post("/api/folders", status_code=201, tags=["folders"])
+    @router.post("/api/folders", status_code=201, tags=["folders"])
     def folder_create(body: NewFolder, request: Request, user_id: int = Depends(current_user)) -> Created:
         def create(connection):
             created = create_folder(connection, user_id, body.name, _now(), parent_id=body.parent_id)
@@ -401,7 +429,7 @@ def register_routes(app: FastAPI) -> None:
         _wake_sorter(request)
         return Created(id=created)
 
-    @app.put("/api/folders/{folder_id}/name", status_code=204, tags=["folders"])
+    @router.put("/api/folders/{folder_id}/name", status_code=204, tags=["folders"], responses=NOT_FOUND)
     def folder_rename(folder_id: int, body: FolderName, request: Request, user_id: int = Depends(current_user)):
         def rename(connection):
             rename_folder(connection, user_id, folder_id, body.name)
@@ -411,16 +439,17 @@ def register_routes(app: FastAPI) -> None:
         _wake_sorter(request)
         return Response(status_code=204)
 
-    @app.put("/api/folders/{folder_id}/parent", status_code=204, tags=["folders"])
+    @router.put("/api/folders/{folder_id}/parent", status_code=204, tags=["folders"], responses=NOT_FOUND)
     def folder_move(folder_id: int, body: FolderParent, user_id: int = Depends(current_user)) -> Response:
         _run(lambda connection: move_folder(connection, user_id, folder_id, body.parent_id))
         return Response(status_code=204)
 
-    @app.delete("/api/folders/{folder_id}", status_code=204, tags=["folders"])
+    @router.delete("/api/folders/{folder_id}", status_code=204, tags=["folders"], responses=NOT_FOUND)
     def folder_delete(folder_id: int, user_id: int = Depends(current_user)) -> Response:
         _run(lambda connection: delete_folder(connection, user_id, folder_id))
         return Response(status_code=204)
 
+    app.include_router(router)
 
 def _run(action):
     """Runs one change on a fresh connection and maps domain errors to HTTP."""

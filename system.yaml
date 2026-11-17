@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=./system.schema.json
+# The whole system in one file (brief §8a). CI validates it against
+# system.schema.json. The Azure names follow the brief's naming rule; the
+# z-number in public_url is confirmed once the storage account exists.
+student: crintz.ieu2024
+prefix: crintz-ieu2024
+public_url: https://crintzieu2024ui.z6.web.core.windows.net
+ui:
+  path: ui
+  storage_account: crintzieu2024ui
+  # inbox for everything; reminders directly for done and snooze (ADR-6).
+  calls: [inbox, reminders]
+azure:
+  resource_group: rg-crintz-ieu2024
+  container_apps_environment: crintz-ieu2024-env
+  sql_server: crintz-ieu2024-sql
+  registry: ghcr.io/christophrrrrr
+services:
+  inbox:
+    description: Accounts, lines, folders, sorting (rules or Gemini), images, and link previews.
+    path: services/inbox
+    openapi: services/inbox/openapi.yaml
+    port_default: 8000
+    health: /health
+    migrations: services/inbox/migrations
+    env:
+      PORT: { default: 8000, description: Port the service listens on }
+      DATABASE_URL: { secret: true, description: "Connection string of the inbox database, mssql://user:password@host:port/database" }
+      SESSION_SECRET: { secret: true, description: "Key that signs the tokens, the same value in both services" }
+      REMINDERS_URL: { default: "http://127.0.0.1:8001", description: Base URL of the reminders service }
+      REMINDERS_TIMEOUT: { default: 2, description: Timeout in seconds for every call to reminders }
+      CORS_ORIGINS: { default: "", description: Comma-separated browser origins allowed to call the service (the UI's address) }
+      SORTER: { default: auto, description: "auto (Gemini when a key is set, else rules), gemini, or rules" }
+      GEMINI_API_KEY: { secret: true, description: "Google Gemini key, without it the rules sorter is used" }
+      GEMINI_MODEL: { default: gemini-3.5-flash-lite, description: Gemini model that sorts lines }
+      GEMINI_IMAGE_MODEL: { default: gemini-3.8-flash, description: Gemini model that reads screenshots }
+      GIT_SHA: { default: dev, description: "Commit the image was built from, shown by /health" }
+    calls:
+      - service: reminders
+        url_env: REMINDERS_URL
+        endpoints: ["GET /reminders", "PUT /reminders/{item_id}", "DELETE /reminders/{item_id}"]
+        timeout_s: 2
+        on_failure: >-
+          Lines are still listed and saved, without their reminder times and with a "reminders unavailable"
+          notice. Setting a time answers 503 with a clear message, and the line is kept.
+    azure:
+      container_app: crintz-ieu2024-inbox
+      sql_database: crintz-ieu2024-inbox-db
+  reminders:
+    description: Reminder times for lines, and when each is due, snoozed, or done.
+    path: services/reminders
+    openapi: services/reminders/openapi.yaml
+    port_default: 8001
+    health: /health
+    migrations: services/reminders/migrations
+    env:
+      PORT: { default: 8001, description: Port the service listens on }
+      DATABASE_URL: { secret: true, description: "Connection string of the reminders database, mssql://user:password@host:port/database" }
+      SESSION_SECRET: { secret: true, description: "Key that checks the tokens, the same value in both services" }
+      CORS_ORIGINS: { default: "", description: Comma-separated browser origins allowed to call the service (the UI's address) }
+      GIT_SHA: { default: dev, description: "Commit the image was built from, shown by /health" }
+    # Reminders never calls inbox: it stores item ids and trusts the inbox token.
+    calls: []
+    azure:
+      container_app: crintz-ieu2024-reminders
+      sql_database: crintz-ieu2024-reminders-db
