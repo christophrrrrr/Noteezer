@@ -23,7 +23,7 @@ from app.reminders_client import RemindersClient, RemindersUnavailable, default_
 from app.sorting import Suggestion, accept_reminder, results_for, sort_pending
 from app.tokens import verify
 from app.users import register_user
-from tests.conftest import REMINDERS_DB
+from tests.conftest import REMINDERS_DB, sign_in
 
 # The reminders service uses the real clock, so these times are relative to it.
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
@@ -84,15 +84,16 @@ def test_a_time_is_stored_in_reminders_with_its_owner_and_goes_with_the_item() -
     connection.close()
 
 
-def test_done_and_snooze_on_the_page_reach_reminders() -> None:
+def test_the_list_says_reminders_are_unavailable_and_still_answers(monkeypatch) -> None:
     with TestClient(create_app()) as client:
-        client.post("/register", data={"email": "a@example.com", "password": "password1"})
-        client.post("/inbox", data={"body": "remind stretch", "remind_at": "2020-01-01T09:00"})
-        client.post("/items/1/snooze")
-        assert _reminder_rows()[0][3] == "snoozed"
-        client.post("/items/1/done")
-        assert _reminder_rows()[0][3] == "done"
-        assert client.post("/items/1/snooze", follow_redirects=False).status_code == 303  # done cannot snooze
+        sign_in(client)
+        client.post("/api/items", data={"body": "remind stretch", "remind_at": "2030-01-01T09:00"})
+        assert client.get("/api/items").json()["reminders_down"] is False
+        _down(monkeypatch)
+        listed = client.get("/api/items").json()
+        assert listed["reminders_down"] is True
+        assert listed["items"][0]["body"] == "remind stretch"
+        assert client.post("/api/items", data={"body": "remind call mom"}).status_code == 201
 
 
 def test_a_line_still_saves_when_reminders_is_down(monkeypatch) -> None:
@@ -109,19 +110,6 @@ def test_a_line_still_saves_when_reminders_is_down(monkeypatch) -> None:
     assert _needs_time(connection, item_id) == 1  # waits as "no time yet"
     delete_item(connection, owner, item_id)  # the leftover reminder, if any, is harmless
     connection.close()
-
-
-def test_the_page_says_reminders_are_unavailable_and_buttons_still_answer(monkeypatch) -> None:
-    with TestClient(create_app()) as client:
-        client.post("/register", data={"email": "a@example.com", "password": "password1"})
-        client.post("/inbox", data={"body": "remind stretch", "remind_at": "2030-01-01T09:00"})
-        assert "Reminders are unavailable" not in client.get("/inbox").text
-        _down(monkeypatch)
-        page = client.get("/inbox")
-        assert "Reminders are unavailable" in page.text
-        assert "remind stretch" in page.text
-        for action in ("done", "snooze"):
-            assert client.post(f"/items/1/{action}", follow_redirects=False).status_code == 303
 
 
 def test_the_sorter_retries_a_time_it_could_not_store(monkeypatch) -> None:

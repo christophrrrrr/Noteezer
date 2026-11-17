@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.db import connect
 from app.folders import create_folder
@@ -19,7 +18,6 @@ from app.images import (
     readable_image,
 )
 from app.inbox import list_items, save_item
-from app.main import create_app
 from app.sorting import FolderOption, Note, Part, Suggestion, results_for, sort_pending
 from app.users import register_user
 
@@ -165,54 +163,3 @@ def test_gemini_gets_the_image_and_returns_a_title_and_its_text() -> None:
     assert len(suggestion.image_text) == 1000
     blank = parse_answer(json.dumps({"image_title": " ", "image_text": 5}), folders)
     assert (blank.image_title, blank.image_text) == (None, None)
-
-
-def test_uploading_and_viewing_an_image_through_the_pages(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SESSION_SECRET", "test-secret")
-    with TestClient(create_app()) as client:
-        client.post("/register", data={"email": "a@example.com", "password": "password1"})
-        saved = client.post(
-            "/inbox",
-            data={"body": "", "ai_image": "1"},
-            files={"image": ("shot.png", PNG, "image/png")},
-            follow_redirects=False,
-        )
-        assert saved.status_code == 303
-        page = client.get("/inbox")
-        assert '<img class="shot" src="/items/1/image"' in page.text
-        assert ">Screenshot</div>" in page.text
-
-        picture = client.get("/items/1/image")
-        assert picture.content == PNG
-        assert picture.headers["content-type"] == "image/png"
-        assert picture.headers["x-content-type-options"] == "nosniff"
-
-        refused = client.post("/inbox", data={"body": ""}, files={"image": ("x.svg", b"<svg/>", "image/png")})
-        assert refused.status_code == 400
-        assert "Use a PNG, JPEG, WebP, or GIF image." in refused.text
-        # What a browser sends when no file was chosen: a file part with an empty name.
-        boundary = "----NoFileChosen"
-        no_file = "\r\n".join(
-            [
-                f"--{boundary}",
-                'Content-Disposition: form-data; name="body"',
-                "",
-                "",
-                f"--{boundary}",
-                'Content-Disposition: form-data; name="image"; filename=""',
-                "Content-Type: application/octet-stream",
-                "",
-                "",
-                f"--{boundary}--",
-                "",
-            ]
-        ).encode()
-        empty = client.post(
-            "/inbox", content=no_file, headers={"content-type": f"multipart/form-data; boundary={boundary}"}
-        )
-        assert empty.status_code == 400
-        assert "Write something before saving." in empty.text
-
-        client.post("/logout")
-        client.post("/register", data={"email": "b@example.com", "password": "password1"})
-        assert client.get("/items/1/image").status_code == 404

@@ -1,0 +1,38 @@
+# nginx for the static UI in docker compose. The official nginx image fills
+# ${INBOX_URL} and ${REMINDERS_URL} from the environment when it starts.
+# In Azure, Static Web Apps serves the same files (ADR-8).
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+
+    # The browser may only load this site's own files, and may only call the
+    # two services. No inline scripts, no frames, no plugins.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' ${INBOX_URL} ${REMINDERS_URL}; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    # Where the services are, written from the environment instead of a file.
+    location = /config.js {
+        default_type application/javascript;
+        add_header Cache-Control "no-cache" always;
+        add_header Content-Security-Policy "default-src 'none'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        return 200 'window.NOTEEZER = { inboxUrl: "${INBOX_URL}", remindersUrl: "${REMINDERS_URL}" };\n';
+    }
+
+    # Never cached by the browser, so a new version is picked up on the next visit.
+    location = /sw.js {
+        add_header Cache-Control "no-cache" always;
+        add_header Content-Security-Policy "default-src 'self'" always;
+    }
+
+    location = /manifest.webmanifest {
+        default_type application/manifest+json;
+    }
+
+    # One page: any other path, like /?folder=3 after a reload, gets index.html.
+    location / {
+        try_files $uri /index.html;
+    }
+}

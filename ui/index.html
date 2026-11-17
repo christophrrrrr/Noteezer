@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#191919">
+  <meta name="color-scheme" content="dark">
+  <title>Noteezer</title>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <script src="/config.js"></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <!-- Logged out: one card that switches between log in and create account. -->
+  <main class="auth" id="auth" hidden>
+    <div class="auth-card">
+      <span class="brand">Noteezer</span>
+      <h1 data-auth-title>Log in</h1>
+      <p>Type it once, find it sorted later.</p>
+      <p class="banner error" data-auth-error hidden></p>
+      <form data-auth-form>
+        <input name="email" type="email" placeholder="Email" autocomplete="username" required>
+        <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+        <button class="button primary" type="submit" data-auth-submit>Log in</button>
+      </form>
+      <p><a href="#" data-auth-switch>Create an account</a></p>
+    </div>
+  </main>
+
+  <!-- Logged in. app.js fills the folder tree, the feed, and the menus. -->
+  <div class="shell" id="app" hidden>
+    <aside class="sidebar" aria-label="Folders">
+      <div class="sidebar-head">
+        <span class="brand">Noteezer</span>
+        <button class="icon-button only-mobile" type="button" data-close-sidebar aria-label="Close folders" data-icon="x:18"></button>
+      </div>
+      <nav class="tree" data-tree></nav>
+      <details class="new-folder" data-new-folder>
+        <summary class="tree-row"><span data-icon="plus"></span><span>New folder</span></summary>
+        <form class="stack" data-folder-form>
+          <input name="name" placeholder="Folder name" maxlength="60" required>
+          <select name="parent" aria-label="Inside" data-parent-select></select>
+          <button class="button primary" type="submit">Create folder</button>
+        </form>
+      </details>
+      <div class="sidebar-foot">
+        <button class="tree-row" type="button" data-logout><span data-icon="logout"></span><span>Log out</span></button>
+      </div>
+    </aside>
+    <div class="scrim" data-close-sidebar></div>
+
+    <main class="main">
+      <div class="column">
+        <header class="topbar">
+          <button class="icon-button only-mobile" type="button" data-open-sidebar aria-label="Folders" data-icon="menu:20"></button>
+          <div class="heading">
+            <div class="crumbs" data-crumbs hidden></div>
+            <h1 data-title>Everything</h1>
+          </div>
+          <form class="search" role="search" data-search>
+            <span data-icon="search:15"></span>
+            <input name="q" placeholder="Search" aria-label="Search">
+          </form>
+          <details class="menu" data-folder-menu hidden>
+            <summary class="icon-button" aria-label="Folder settings" data-icon="dots:18"></summary>
+            <div class="menu-panel">
+              <span class="menu-label">Rename</span>
+              <form class="row" data-rename-form>
+                <input name="name" maxlength="60" required aria-label="Folder name">
+                <button class="button" type="submit">Save</button>
+              </form>
+              <span class="menu-label">Move inside</span>
+              <form class="row" data-move-form>
+                <select name="parent" aria-label="Move inside"></select>
+                <button class="button" type="submit">Move</button>
+              </form>
+              <button class="button danger wide" type="button" data-delete-folder>Delete folder</button>
+            </div>
+          </details>
+        </header>
+
+        <p class="banner error" data-error hidden></p>
+        <p class="banner error" data-reminders-down hidden>Reminders are unavailable right now. Lines still save; their times show again when reminders is back.</p>
+        <div class="banner" data-unsorted-banner hidden></div>
+        <nav class="subfolders" aria-label="Subfolders" data-subfolders hidden></nav>
+
+        <section class="feed" aria-label="Notes" data-feed></section>
+
+        <form class="composer" data-capture>
+          <div class="composer-box">
+            <div class="attached" data-attached hidden>
+              <span data-icon="image:14"></span><span data-attached-name></span>
+              <button class="icon-button" type="button" data-clear-file aria-label="Remove image" data-icon="x:14"></button>
+            </div>
+            <div class="composer-line">
+              <textarea name="body" rows="1" placeholder="Write a line, or paste a screenshot"></textarea>
+              <label class="icon-button attach" aria-label="Add an image">
+                <span data-icon="clip:18"></span>
+                <input name="image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Image">
+              </label>
+              <button class="icon-button" type="button" aria-label="Options" data-toggle-options data-icon="sliders:18"></button>
+              <button class="send" type="submit" aria-label="Save" data-icon="send:18"></button>
+            </div>
+            <div class="options" hidden>
+              <label class="field">Kind
+                <select name="kind">
+                  <option value="">Sort it for me</option>
+                  <option value="note">Note</option>
+                  <option value="idea">Idea</option>
+                  <option value="task">Task</option>
+                  <option value="link">Link</option>
+                  <option value="reminder">Reminder</option>
+                </select>
+              </label>
+              <label class="field">Remind at
+                <input name="remind_at" type="datetime-local">
+              </label>
+              <label class="field">Every day until
+                <input name="repeat_until" type="date">
+              </label>
+              <div class="stack">
+                <label><input name="repeat_daily" type="checkbox" value="true"> Every day</label>
+                <label><input name="ai_image" type="checkbox" value="true" checked> Let AI read this image</label>
+              </div>
+            </div>
+          </div>
+        </form>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
