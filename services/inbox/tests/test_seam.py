@@ -195,10 +195,15 @@ def test_each_call_carries_an_inbox_token_for_the_user_and_the_request_id(monkey
 def test_health_reports_the_database_and_responses_carry_a_request_id(monkeypatch) -> None:
     with TestClient(create_app()) as client:
         up = client.get("/health")
-        assert up.json() == {"ok": True, "database": "up"}
+        assert up.json() == {"status": "ok", "db": "ok", "version": "dev"}
         assert len(up.headers["X-Request-ID"]) == 12
-        monkeypatch.setenv("DB_PORT", "1")
-        assert client.get("/health").status_code == 503
+        # Health is about inbox's own database only: reminders being down
+        # does not make inbox unhealthy.
+        monkeypatch.setenv("REMINDERS_URL", "http://127.0.0.1:1")
+        assert client.get("/health").status_code == 200
+        monkeypatch.setenv("DATABASE_URL", "mssql://nobody:wrong@127.0.0.1:1/nowhere")
+        down = client.get("/health")
+        assert (down.status_code, down.json()["db"]) == (503, "down")
 
 
 def test_shared_files_are_the_same_in_both_services() -> None:

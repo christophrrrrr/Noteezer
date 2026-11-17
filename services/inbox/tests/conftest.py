@@ -1,10 +1,11 @@
 """Tests run against a real SQL Server, the same engine as Azure SQL.
 
-Start one locally with the docker run command in the README. The DB_SERVER,
-DB_PORT, DB_USER, and DB_PASSWORD variables point at it, from the environment
-or from services/inbox/.env (never from the repo: no password is written in
-code). A fresh database named TEST_DB_NAME is created for each test run,
-migrated once, and emptied before every test, so ids start at 1 each time.
+Start one locally with the docker run command in the README. DATABASE_URL
+points at it with a login that may create databases (sa locally and in CI),
+from the environment or from services/inbox/.env (never from the repo: no
+password is written in code). Its database name is ignored: a fresh database
+named TEST_DB_NAME is created for each test run, migrated once, and emptied
+before every test, so ids start at 1 each time.
 
 The real reminders service runs next to the tests: the session starts it with
 `python -m app` from services/reminders, on a free port and with its own test
@@ -17,6 +18,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import pymssql
@@ -24,17 +26,24 @@ import pytest
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-if not os.environ.get("DB_PASSWORD"):
-    pytest.exit("Set DB_PASSWORD (in the environment or services/inbox/.env) to the SQL Server password.", returncode=2)
-os.environ["DB_NAME"] = os.environ.get("TEST_DB_NAME", "noteezer_inbox_test")
+if not os.environ.get("DATABASE_URL"):
+    pytest.exit("Set DATABASE_URL (in the environment or services/inbox/.env); see the README.", returncode=2)
+SERVER_URL = os.environ["DATABASE_URL"]
+
+
+def database_url(name: str) -> str:
+    """DATABASE_URL with the same login and server, pointing at another database."""
+    return urlunsplit(urlsplit(SERVER_URL)._replace(path="/" + name))
+
+
+TEST_DB = os.environ.get("TEST_DB_NAME", "noteezer_inbox_test")
+os.environ["DATABASE_URL"] = database_url(TEST_DB)
 os.environ["SESSION_SECRET"] = "test-secret"
 REMINDERS_DB = os.environ.get("TEST_REMINDERS_DB_NAME", "noteezer_reminders_test")
 REMINDERS_DIR = Path(__file__).resolve().parents[2] / "reminders"
 
 from app.db import connect  # noqa: E402  (needs the variables above)
 from app.migrate import migrate  # noqa: E402
-
-TEST_DB = os.environ["DB_NAME"]
 
 # Children before parents, so no foreign key blocks a delete. folders and items
 # point at themselves, which is fine: one DELETE removes the whole table.
@@ -59,7 +68,7 @@ def create_database(name: str) -> None:
         server = connect("master", autocommit=True, attempts=1)
     except pymssql.OperationalError as error:
         pytest.exit(
-            f"Cannot reach SQL Server at {os.environ.get('DB_SERVER', 'localhost')}. "
+            f"Cannot reach SQL Server at {urlsplit(SERVER_URL).hostname}. "
             f"Start the container from the README first. ({error})",
             returncode=2,
         )
@@ -117,7 +126,7 @@ def reminders_service(tmp_path_factory):
     process = subprocess.Popen(
         [sys.executable, "-m", "app"],
         cwd=REMINDERS_DIR,
-        env={**os.environ, "DB_NAME": REMINDERS_DB, "PORT": str(port)},
+        env={**os.environ, "DATABASE_URL": database_url(REMINDERS_DB), "PORT": str(port)},
         stdout=log_file,
         stderr=subprocess.STDOUT,
     )

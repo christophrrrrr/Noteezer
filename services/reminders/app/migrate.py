@@ -12,6 +12,7 @@ This file is identical in services/inbox and services/reminders; a test in
 each service fails if the two copies differ.
 """
 
+import logging
 import re
 import sys
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from app.db import Connection, connect
+
+log = logging.getLogger(__name__)
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 FILE_NAME = re.compile(r"^(\d+)_[\w-]+\.sql$")
@@ -72,12 +75,32 @@ def migrate(connection: Connection, directory: Path = MIGRATIONS_DIR) -> list[st
         except Exception as error:
             connection.rollback()
             raise MigrationError(f"{path.name} failed and was rolled back: {error}") from error
+        # The startup log line that shows a migration ran (the evidence on Azure).
+        log.info("Applied migration %s", path.name)
         applied.append(path.name)
+    if not applied:
+        log.info("No migration to apply, the database is up to date")
     return applied
 
 
 def split_batches(script: str) -> list[str]:
     return [batch.strip() for batch in BATCH_SEPARATOR.split(script) if batch.strip()]
+
+
+def check_read_write(connection: Connection) -> None:
+    """Proves the service can read and write its own database, for /health.
+
+    It reads schema_migrations and writes a row into it, then rolls the write
+    back, so nothing is stored. Any failure raises.
+    """
+    connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()
+    try:
+        connection.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            ("health-check", datetime.now(timezone.utc).isoformat()),
+        )
+    finally:
+        connection.rollback()
 
 
 def _ensure_table(connection: Connection) -> None:

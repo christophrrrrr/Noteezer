@@ -3,12 +3,11 @@ import contextlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 
 from app import middleware
 from app.api import register_routes
 from app.db import DatabaseError, connect
-from app.migrate import migrate
+from app.migrate import check_read_write, migrate
 from app.sorting import sorter_from_env
 from app.worker import SortWorker
 
@@ -33,17 +32,7 @@ def create_app() -> FastAPI:
 
     middleware.install(app, "inbox")
 
-    @app.get("/health")
-    def health() -> JSONResponse:
-        try:
-            connection = connect(attempts=1)
-            try:
-                connection.execute("SELECT 1").fetchone()
-            finally:
-                connection.close()
-        except (DatabaseError, RuntimeError):
-            return JSONResponse({"ok": False, "database": "down"}, status_code=503)
-        return JSONResponse({"ok": True, "database": "up"})
+    middleware.health_route(app, connect, check_read_write, (DatabaseError,))
 
     register_routes(app)
     return app

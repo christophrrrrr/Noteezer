@@ -14,6 +14,7 @@ import os
 import re
 import time
 from collections.abc import Iterable, Iterator, Sequence
+from urllib.parse import unquote, urlsplit
 
 import pymssql
 
@@ -31,16 +32,28 @@ FIRST_WAIT_SECONDS = 2.0
 
 
 def settings(database: str | None = None) -> dict[str, object]:
-    name = database or os.environ.get("DB_NAME", "")
+    """Reads DATABASE_URL: mssql://<user>:<password>@<host>:<port>/<database>.
+
+    Each service has its own login, which can reach only its own database. A
+    password with characters such as @, /, or # must be percent-encoded.
+    Passing a database name overrides the one in the URL (the tests use it).
+    """
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        raise RuntimeError("DATABASE_URL is not set.")
+    parts = urlsplit(url)
+    if parts.scheme != "mssql":
+        raise RuntimeError("DATABASE_URL must start with mssql://")
+    name = database or unquote(parts.path.lstrip("/"))
     if not name:
         # Without a name pymssql would quietly use the login's default
-        # database (master), and the migrations would create tables there.
-        raise RuntimeError("DB_NAME is not set.")
+        # database, and the migrations would create tables there.
+        raise RuntimeError("DATABASE_URL names no database.")
     return {
-        "server": os.environ.get("DB_SERVER", "localhost"),
-        "port": os.environ.get("DB_PORT", "1433"),
-        "user": os.environ.get("DB_USER", "sa"),
-        "password": os.environ.get("DB_PASSWORD", ""),
+        "server": parts.hostname or "localhost",
+        "port": str(parts.port or 1433),
+        "user": unquote(parts.username or ""),
+        "password": unquote(parts.password or ""),
         "database": name,
     }
 

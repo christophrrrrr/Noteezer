@@ -265,7 +265,8 @@ def test_the_ui_finishes_reminders_in_the_reminders_service_with_the_same_token(
 
 def test_images_are_uploaded_and_fetched_with_the_token(client: TestClient) -> None:
     sign_in(client)
-    saved = client.post("/api/items", data={"body": "", "ai_image": "false"}, files={"image": ("shot.png", PNG, "image/png")})
+    image = {"image": ("shot.png", PNG, "image/png")}
+    saved = client.post("/api/items", data={"body": "", "ai_image": "false"}, files=image)
     assert saved.status_code == 201
     item = _listed(client)[saved.json()["id"]]
     assert item["body"] == "Screenshot"

@@ -11,12 +11,11 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app import middleware
 from app.db import Connection, DatabaseError, connect
-from app.migrate import migrate
+from app.migrate import check_read_write, migrate
 from app.reminders import ReminderExists, complete, list_for, remove, schedule, snooze
 from app.tokens import Claims, from_header, verify
 
@@ -65,17 +64,7 @@ def create_app(run_migrations: bool = True) -> FastAPI:
             raise HTTPException(403, "only the inbox service may change which items have reminders")
         return claims
 
-    @app.get("/health")
-    def health() -> Response:
-        try:
-            connection = connect(attempts=1)
-            try:
-                connection.execute("SELECT 1").fetchone()
-            finally:
-                connection.close()
-        except (DatabaseError, RuntimeError):
-            return JSONResponse({"ok": False, "database": "down"}, status_code=503)
-        return JSONResponse({"ok": True, "database": "up"})
+    middleware.health_route(app, connect, check_read_write, (DatabaseError,))
 
     @app.get("/reminders")
     def list_reminders(

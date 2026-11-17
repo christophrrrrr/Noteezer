@@ -21,6 +21,10 @@ RUN --mount=type=secret,id=extra_ca,required=false \
 COPY app ./app
 COPY migrations ./migrations
 
+# The commit the image was built from, shown by /health. CI passes the SHA.
+ARG GIT_SHA=dev
+ENV GIT_SHA=$GIT_SHA
+
 # Run as a plain user, not root.
 RUN useradd --system --uid 10001 --no-create-home noteezer
 USER noteezer
