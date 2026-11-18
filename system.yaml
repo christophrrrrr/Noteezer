@@ -1,10 +1,10 @@
 # yaml-language-server: $schema=./system.schema.json
 # The whole system in one file (brief §8a). CI validates it against
 # system.schema.json. The Azure names follow the brief's naming rule; the
-# z-number in public_url is confirmed once the storage account exists.
+# setup that creates them is in the README.
 student: crintz.ieu2024
 prefix: crintz-ieu2024
-public_url: https://crintzieu2024ui.z6.web.core.windows.net
+public_url: https://crintzieu2024ui.z1.web.core.windows.net
 ui:
   path: ui
   storage_account: crintzieu2024ui

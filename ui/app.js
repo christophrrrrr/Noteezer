@@ -1,4 +1,4 @@
-// Noteezer's static UI (ADR-8). It talks to two services:
+// Noteezer's static UI (ADR-6). It talks to two services:
 //   inbox     — accounts, lines, folders, sorting, images (everything but times)
 //   reminders — done and snooze on a reminder (ADR-7)
 // Their addresses come from config.js, which is written at deploy time.
@@ -798,7 +798,7 @@
   });
 
   $("[data-logout]").addEventListener("click", function () {
-    // The token simply stays behind; it is only valid until it expires (ADR-8).
+    // The token simply stays behind; it is only valid until it expires (ADR-6).
     setToken(null);
     Object.keys(imageUrls).forEach(function (id) { URL.revokeObjectURL(imageUrls[id]); });
     imageUrls = {};
