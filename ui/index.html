@@ -15,6 +15,9 @@
   <script src="/app.js" defer></script>
 </head>
 <body>
+  <!-- Shown while a service or its database starts after a quiet period. -->
+  <p class="banner starting" data-starting role="status" hidden>Noteezer is starting up after a quiet period. This can take up to a minute; it carries on by itself.</p>
+
   <!-- Logged out: one card that switches between log in and create account. -->
   <main class="auth" id="auth" hidden>
     <div class="auth-card">
