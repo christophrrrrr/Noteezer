@@ -9,12 +9,14 @@
 #              the code (scripts/check_system.py)
 #   build      both Docker images, exactly as they will ship; not pushed yet
 #
-# CI never touches Azure SQL. The CD workflow will call this one first
-# (workflow_call), so a deploy only happens after these jobs pass.
+# CI never touches Azure SQL. On main, cd.yml calls this workflow first
+# (workflow_call), so a deploy only happens after these jobs pass, and its own
+# push trigger skips main so the jobs do not run twice.
 name: CI
 
 on:
   push:
+    branches-ignore: [main]
   pull_request:
   workflow_call:
 

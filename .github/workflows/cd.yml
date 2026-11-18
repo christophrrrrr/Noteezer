@@ -1,0 +1,155 @@
+# CD: every push to main (brief §5, §7). Nothing else deploys (ADR-8).
+#
+#   ci       the whole CI workflow on this commit; a red job stops here
+#   images   pushes both images to GHCR, tagged with the commit SHA
+#   deploy   signs in to Azure as the managed identity <prefix>-github through
+#            OIDC (no Azure password is stored), points both Container Apps
+#            at the new images with their secrets, builds the UI with the
+#            services' addresses and uploads it to the $web container, then
+#            waits until both /health answer 200 with this commit as version
+#
+# Secrets (Settings > Secrets and variables > Actions): AZURE_CLIENT_ID,
+# AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, INBOX_DB_PASSWORD,
+# REMINDERS_DB_PASSWORD, SESSION_SECRET, GEMINI_API_KEY (optional).
+# Variables: PREFIX, RESOURCE_GROUP, UI_STORAGE. The one-time Azure setup that
+# creates what this workflow updates is in the README.
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+# Two deploys never run at once; a newer one waits for the one before.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  images:
+    needs: ci
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service: [inbox, reminders]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push the ${{ matrix.service }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          push: true
+          # Azure cannot pull GHCR images that carry a provenance manifest.
+          provenance: false
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/noteezer-${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    needs: images
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PREFIX: ${{ vars.PREFIX }}
+      RG: ${{ vars.RESOURCE_GROUP }}
+      UI_STORAGE: ${{ vars.UI_STORAGE }}
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Find the addresses
+        run: |
+          fqdn() { az containerapp show -n "$PREFIX-$1" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv; }
+          ui_url="$(az storage account show -n "$UI_STORAGE" -g "$RG" --query primaryEndpoints.web -o tsv)"
+          {
+            echo "INBOX_URL=https://$(fqdn inbox)"
+            echo "REMINDERS_URL=https://$(fqdn reminders)"
+            echo "UI_URL=${ui_url%/}"
+            echo "SQL_HOST=$PREFIX-sql.database.windows.net"
+          } >> "$GITHUB_ENV"
+
+      - name: Deploy reminders
+        env:
+          DB_PASSWORD: ${{ secrets.REMINDERS_DB_PASSWORD }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+        run: |
+          app="$PREFIX-reminders"
+          az containerapp secret set -n "$app" -g "$RG" --output none --secrets \
+            "database-url=mssql://reminders:$DB_PASSWORD@$SQL_HOST:1433/$PREFIX-reminders-db" \
+            "session-secret=$SESSION_SECRET"
+          az containerapp update -n "$app" -g "$RG" --output none \
+            --image "$REGISTRY/noteezer-reminders:$SHA" \
+            --set-env-vars DATABASE_URL=secretref:database-url SESSION_SECRET=secretref:session-secret \
+              "CORS_ORIGINS=$UI_URL"
+
+      - name: Deploy inbox
+        env:
+          DB_PASSWORD: ${{ secrets.INBOX_DB_PASSWORD }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          app="$PREFIX-inbox"
+          secrets=("database-url=mssql://inbox:$DB_PASSWORD@$SQL_HOST:1433/$PREFIX-inbox-db" "session-secret=$SESSION_SECRET")
+          variables=(DATABASE_URL=secretref:database-url SESSION_SECRET=secretref:session-secret
+                     "REMINDERS_URL=$REMINDERS_URL" "CORS_ORIGINS=$UI_URL")
+          # Without a Gemini key the rules sort, so the key is optional.
+          if [ -n "$GEMINI_API_KEY" ]; then
+            secrets+=("gemini-api-key=$GEMINI_API_KEY")
+            variables+=(GEMINI_API_KEY=secretref:gemini-api-key)
+          fi
+          az containerapp secret set -n "$app" -g "$RG" --output none --secrets "${secrets[@]}"
+          az containerapp update -n "$app" -g "$RG" --output none \
+            --image "$REGISTRY/noteezer-inbox:$SHA" --set-env-vars "${variables[@]}"
+
+      - name: Build and upload the UI
+        run: |
+          python3 scripts/build_ui.py --inbox "$INBOX_URL" --reminders "$REMINDERS_URL" --out build/ui
+          # no-cache: browsers check for a new copy on every load, so a deploy
+          # shows at once; unchanged files still answer 304.
+          az storage blob upload-batch --account-name "$UI_STORAGE" --auth-mode key \
+            --destination '$web' --source build/ui --overwrite --output none \
+            --content-cache-control "no-cache"
+
+      - name: Wait for both services to be healthy
+        # A cold start can take a few minutes: a new revision starts, and a
+        # paused database takes about a minute to resume. /health must answer
+        # 200 with this commit as its version, so the old revision does not count.
+        run: |
+          for service in inbox reminders; do
+            url="$([ "$service" = inbox ] && echo "$INBOX_URL" || echo "$REMINDERS_URL")/health"
+            for attempt in $(seq 1 40); do
+              body="$(curl -sS --max-time 30 "$url" || true)"
+              echo "$service, attempt $attempt: $body"
+              if echo "$body" | grep -q "\"status\":\"ok\"" && echo "$body" | grep -q "\"version\":\"$SHA\""; then
+                continue 2
+              fi
+              sleep 10
+            done
+            echo "::error::$service never became healthy at $url"
+            exit 1
+          done
+          echo "Live at $UI_URL"
