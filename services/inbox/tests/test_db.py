@@ -1,5 +1,7 @@
+import pymssql
 import pytest
 
+from app import db
 from app.db import IntegrityError, Row, _placeholders, connect, settings
 
 USER = "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)"
@@ -118,3 +120,50 @@ def test_a_missing_or_wrong_database_url_is_refused(monkeypatch, url: str, probl
     monkeypatch.setenv("DATABASE_URL", url)
     with pytest.raises(RuntimeError, match=problem):
         settings()
+
+
+@pytest.mark.parametrize("code", ["40613", "20002", "20003"])
+def test_connecting_waits_while_a_paused_database_resumes(monkeypatch, code: str) -> None:
+    # Azure SQL serverless answers with one of these codes while it resumes.
+    calls = []
+    waits = []
+
+    def fake_connect(**kwargs):
+        calls.append(kwargs)
+        if len(calls) < 3:
+            raise pymssql.OperationalError(int(code), f"DB-Lib error message {code}")
+        return object()
+
+    monkeypatch.setattr(db.pymssql, "connect", fake_connect)
+    monkeypatch.setattr(db.time, "sleep", waits.append)
+    db.connect()
+    assert len(calls) == 3
+    assert waits == [2.0, 4.0]
+
+
+def test_a_wrong_password_is_not_retried(monkeypatch) -> None:
+    calls = []
+
+    def fake_connect(**kwargs):
+        calls.append(kwargs)
+        raise pymssql.OperationalError(18456, "Login failed for user 'inbox'.")
+
+    monkeypatch.setattr(db.pymssql, "connect", fake_connect)
+    monkeypatch.setattr(db.time, "sleep", lambda seconds: None)
+    with pytest.raises(pymssql.OperationalError):
+        db.connect()
+    assert len(calls) == 1
+
+
+def test_connecting_gives_up_after_the_last_attempt(monkeypatch) -> None:
+    calls = []
+
+    def fake_connect(**kwargs):
+        calls.append(kwargs)
+        raise pymssql.OperationalError(20002, "DB-Lib error message 20002")
+
+    monkeypatch.setattr(db.pymssql, "connect", fake_connect)
+    monkeypatch.setattr(db.time, "sleep", lambda seconds: None)
+    with pytest.raises(pymssql.OperationalError):
+        db.connect(attempts=3)
+    assert len(calls) == 3

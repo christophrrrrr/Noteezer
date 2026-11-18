@@ -1,4 +1,4 @@
-// Noteezer's static UI (ADR-8). It talks to two services:
+// Noteezer's static UI (ADR-6). It talks to two services:
 //   inbox     — accounts, lines, folders, sorting, images (everything but times)
 //   reminders — done and snooze on a reminder (ADR-7)
 // Their addresses come from config.js, which is written at deploy time.
@@ -120,6 +120,65 @@
   }
   ApiError.prototype = Object.create(Error.prototype);
 
+  // ---------- cold starts ----------
+  //
+  // On Azure both services scale to zero and their databases pause after an
+  // hour. The first request after a quiet period starts a container, which
+  // may wait about a minute for its database: meanwhile Azure answers 503 "App
+  // port is not ready" (without CORS headers, so the browser only sees a
+  // failed fetch), or the service's own /health answers 503. A GET is retried
+  // with a growing wait, about 90 seconds in all, under a "starting up"
+  // banner. Other methods are not retried, because a request that timed out
+  // may still have been saved; they say what happened instead.
+
+  var STARTING_WAITS = [2, 3, 5, 8, 12, 15, 15, 15, 15]; // seconds
+  var startingBanner = document.querySelector("[data-starting]");
+  var startingWaits = 0;
+
+  function showStarting(change) {
+    startingWaits += change;
+    startingBanner.hidden = startingWaits <= 0;
+  }
+
+  // A 503 from the services' own code carries a JSON "detail" (reminders is
+  // down, for example) and is final. Anything else from 502 to 504 means the
+  // service or its database is still starting.
+  function stillStarting(response) {
+    if ([502, 503, 504].indexOf(response.status) < 0) return Promise.resolve(false);
+    return response.clone().json()
+      .then(function (data) { return typeof data.detail !== "string"; })
+      .catch(function () { return true; });
+  }
+
+  function sendWithRetries(url, init) {
+    var retry = init.method === "GET";
+    var attempt = 0;
+    var showing = false;
+
+    function stopShowing() {
+      if (showing) { showing = false; showStarting(-1); }
+    }
+    function later(failure) {
+      if (!retry || attempt >= STARTING_WAITS.length) return failure();
+      if (!showing) { showing = true; showStarting(1); }
+      var seconds = STARTING_WAITS[attempt++];
+      return new Promise(function (resolve) { setTimeout(resolve, seconds * 1000); }).then(once);
+    }
+    function once() {
+      return fetch(url, init).then(function (response) {
+        return stillStarting(response).then(function (starting) {
+          return starting ? later(function () { return response; }) : response;
+        });
+      }, function (error) {
+        return later(function () { throw error; });
+      });
+    }
+    return once().then(
+      function (response) { stopShowing(); return response; },
+      function (error) { stopShowing(); throw error; }
+    );
+  }
+
   function call(base, path, options) {
     options = options || {};
     var headers = {};
@@ -129,13 +188,23 @@
       headers["Content-Type"] = "application/json";
       body = JSON.stringify(options.json);
     }
-    return fetch(base + path, { method: options.method || "GET", headers: headers, body: body })
+    var method = options.method || "GET";
+    return sendWithRetries(base + path, { method: method, headers: headers, body: body })
       .catch(function () {
         throw new ApiError(0, base === REMINDERS
           ? "Reminders are unavailable right now. Try again in a moment."
-          : "Noteezer cannot be reached. Check your connection and try again.");
+          : method === "GET"
+            ? "Noteezer is still starting up or cannot be reached. Check your connection and try again in a minute."
+            : "Noteezer could not be reached, so this may not have been saved. It may be starting up after a quiet period: wait a moment, reload, and try again.");
       })
       .then(function (response) {
+        if ([502, 503, 504].indexOf(response.status) >= 0 && method === "GET") {
+          // Still starting after every retry.
+          return response.json().catch(function () { return {}; }).then(function (data) {
+            throw new ApiError(response.status, typeof data.detail === "string" ? data.detail
+              : "Noteezer is still starting up. Try again in a minute.");
+          });
+        }
         if (response.status === 401 && memoryToken) {
           setToken(null);
           showAuth("Your login ran out. Log in again.");
@@ -729,7 +798,7 @@
   });
 
   $("[data-logout]").addEventListener("click", function () {
-    // The token simply stays behind; it is only valid until it expires (ADR-8).
+    // The token simply stays behind; it is only valid until it expires (ADR-6).
     setToken(null);
     Object.keys(imageUrls).forEach(function (id) { URL.revokeObjectURL(imageUrls[id]); });
     imageUrls = {};
@@ -854,11 +923,21 @@
     });
   }
 
+  // Wake both services as soon as the page opens, before anyone types a
+  // password: logging in is a POST, which is not retried.
+  function wakeUp() {
+    [INBOX, REMINDERS].forEach(function (base) {
+      sendWithRetries(base + "/health", { method: "GET" }).catch(function () {});
+    });
+  }
+
   if (!INBOX || !REMINDERS) {
     showAuth("config.js does not say where the services are.");
   } else if (memoryToken) {
+    wakeUp();
     start();
   } else {
+    wakeUp();
     setAuthMode(false);
   }
 })();

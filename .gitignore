@@ -8,3 +8,5 @@ htmlcov/
 .env
 assignment_1.md
 docker-compose.override.yml
+.env.azure
+build/

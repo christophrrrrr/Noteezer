@@ -24,9 +24,11 @@ IntegrityError = pymssql.IntegrityError
 DatabaseError = pymssql.DatabaseError
 
 # Azure SQL serverless pauses when idle. The first connection after a pause
-# gets error 40613 ("database is not currently available") for up to about a
-# minute while it resumes, so connecting is retried with a growing wait.
-RETRY_ERRORS = ("40613",)
+# fails for up to about a minute while it resumes: error 40613 ("database is
+# not currently available"), or with pymssql DB-Lib 20002 or 20003 (the
+# connection or the login timed out). So connecting is retried with a growing
+# wait, about a minute in all. /health tries once: the deploy retries it.
+RETRY_ERRORS = ("40613", "20002", "20003")
 CONNECT_ATTEMPTS = 6
 FIRST_WAIT_SECONDS = 2.0
 

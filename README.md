@@ -45,7 +45,7 @@ Without Gemini, times come only from the picker. With Gemini, a line that starts
 
 ## Left for later
 
-**Running without the laptop is the biggest gap, and the Azure deployment is what closes it.** Until it is live, Noteezer runs only where `docker compose up` runs. Both services are configured only through the environment variables below, so the move to Azure needs no code changes.
+Noteezer is deployed on Azure at **https://crintzieu2024ui.z1.web.core.windows.net**, so it no longer needs the laptop (ADR-8). Every push to `main` deploys it; the one-time setup is under [Azure](#azure).
 
 Push notifications to the phone are not built (ADR-5). The in-process background task could send them, but a reminder would only arrive while the computer running Noteezer is on, so they also wait for the always-on deployment. Until then, due reminders are pinned at the top when the app is opened. Also out of scope: chat import, offline mode, sharing items with other people, and video files (a video link is understood from its title).
 
@@ -176,6 +176,112 @@ Coverage is measured on each service's whole `app` (settings in its `pyproject.t
 - **build**: both Docker images, with the commit SHA as their version.
 
 CI never touches Azure SQL.
+
+## Azure
+
+Live at **https://crintzieu2024ui.z1.web.core.windows.net**. The UI is a Storage static website, both services are Container Apps that scale to zero, and each has a serverless Azure SQL database on the free offer (ADR-8). After the first request following a quiet period, the app may show "starting up" for up to a minute while the databases resume.
+
+### Deploying
+
+`.github/workflows/cd.yml` runs on every push to `main` and nothing else changes Azure. It runs CI first, pushes both images to GHCR tagged with the commit SHA, signs in as the managed identity `crintz-ieu2024-github` through OpenID Connect (no Azure password is stored), points each Container App at its new image with its secrets, builds the UI with `scripts/build_ui.py` (which writes `config.js` and the Content-Security-Policy with the services' addresses) and uploads it to the `$web` container, then fails the run unless both `/health` answer 200 with the new commit within about seven minutes. The first deploy failed on purpose: new GHCR packages are private, so each package was made public in its GitHub settings and the job was run again.
+
+GitHub holds these secrets (Settings > Secrets and variables > Actions): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `INBOX_DB_PASSWORD`, `REMINDERS_DB_PASSWORD`, `SESSION_SECRET`, and `GEMINI_API_KEY`, and these variables: `PREFIX=crintz-ieu2024`, `RESOURCE_GROUP=rg-crintz-ieu2024`, `UI_STORAGE=crintzieu2024ui`. The workflow passes the passwords to Container Apps as secrets, never as plain variables.
+
+### One-time setup
+
+Done once on 2026-11-18 with the Azure CLI and `gh`, in Git Bash, signed in with `az login` on the Azure for Students subscription. No password is written here: they were generated into a git-ignored `.env.azure` (`SQL_ADMIN_PASSWORD`, `INBOX_DB_PASSWORD`, `REMINDERS_DB_PASSWORD`, `SESSION_SECRET`, each `secrets.token_hex(16)` plus `Ab1`, or `token_hex(32)` for the session secret) and read from there. In Git Bash, `MSYS_NO_PATHCONV=1` stops paths like `/subscriptions/...` from being rewritten as Windows paths.
+
+```bash
+set -a; . ./.env.azure; set +a
+PREFIX=crintz-ieu2024; RG=rg-$PREFIX; LOCATION=germanywestcentral
+
+# 1. Subscription and region: pick Azure for Students, then one allowed region.
+az account set --subscription "Azure for Students"
+az policy assignment list --query "[?displayName=='Allowed resource deployment regions'].parameters"
+# austriaeast, denmarkeast, switzerlandnorth, germanywestcentral, polandcentral
+
+# 2. Providers and resource group.
+for p in Microsoft.App Microsoft.OperationalInsights Microsoft.Sql Microsoft.Storage Microsoft.ManagedIdentity; do
+  az provider register --namespace $p --wait
+done
+az group create -n $RG -l $LOCATION
+
+# 3. The UI: a Storage static website.
+az storage account create -n crintzieu2024ui -g $RG -l $LOCATION --kind StorageV2 --sku Standard_LRS \
+  --min-tls-version TLS1_2 --allow-blob-public-access false
+az storage blob service-properties update --account-name crintzieu2024ui --auth-mode key \
+  --static-website --index-document index.html --404-document index.html
+
+# 4. SQL server and two serverless databases on the free offer, then one contained user each.
+az sql server create -n $PREFIX-sql -g $RG -l $LOCATION --admin-user noteezeradmin \
+  --admin-password "$SQL_ADMIN_PASSWORD" --minimal-tls-version 1.2
+az sql server firewall-rule create -g $RG -s $PREFIX-sql -n AllowAzureServices \
+  --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0
+for svc in inbox reminders; do
+  az sql db create -g $RG -s $PREFIX-sql -n $PREFIX-$svc-db --edition GeneralPurpose \
+    --compute-model Serverless --family Gen5 --min-capacity 0.5 --capacity 1 \
+    --backup-storage-redundancy Local --use-free-limit true --free-limit-exhaustion-behavior AutoPause
+done
+# Open the firewall to this computer only while creating the users. Use the
+# address Azure reports in its error message if a proxy changes it.
+az sql server firewall-rule create -g $RG -s $PREFIX-sql -n SetupFromLaptop \
+  --start-ip-address <your IP> --end-ip-address <your IP>
+for svc in inbox reminders; do
+  pwvar="$(echo $svc | tr a-z A-Z)_DB_PASSWORD"
+  # sqlcmd from the SQL Server container; it reads $(SVC) and $(USERPW) from the environment.
+  MSYS_NO_PATHCONV=1 docker exec -e SQLCMDPASSWORD="$SQL_ADMIN_PASSWORD" -e USERPW="${!pwvar}" -e SVC=$svc \
+    noteezer-sql /opt/mssql-tools18/bin/sqlcmd -S $PREFIX-sql.database.windows.net -d $PREFIX-$svc-db \
+    -U noteezeradmin -N -b -Q "
+      CREATE USER [\$(SVC)] WITH PASSWORD = '\$(USERPW)';
+      ALTER ROLE db_ddladmin ADD MEMBER [\$(SVC)];
+      ALTER ROLE db_datareader ADD MEMBER [\$(SVC)];
+      ALTER ROLE db_datawriter ADD MEMBER [\$(SVC)];"
+done
+az sql server firewall-rule delete -g $RG -s $PREFIX-sql -n SetupFromLaptop
+
+# 5. Container Apps: one environment (no Log Analytics workspace) and one app per service,
+#    started with a placeholder image that the first deploy replaces.
+az extension add --name containerapp --upgrade
+az containerapp env create -n $PREFIX-env -g $RG -l $LOCATION --logs-destination none
+for pair in inbox:8000 reminders:8001; do
+  az containerapp create -n $PREFIX-${pair%%:*} -g $RG --environment $PREFIX-env \
+    --image mcr.microsoft.com/k8se/quickstart:latest --ingress external --target-port ${pair##*:} \
+    --min-replicas 0 --max-replicas 1 --cpu 0.25 --memory 0.5Gi
+done
+
+# 6. The pipeline's identity: Contributor on this resource group only, trusted for main only.
+az identity create -n $PREFIX-github -g $RG -l $LOCATION
+MSYS_NO_PATHCONV=1 az role assignment create --role Contributor --assignee-principal-type ServicePrincipal \
+  --assignee-object-id "$(az identity show -n $PREFIX-github -g $RG --query principalId -o tsv)" \
+  --scope "$(az group show -n $RG --query id -o tsv)"
+owner_id=$(gh api repos/christophrrrrr/Noteezer --jq .owner.id); repo_id=$(gh api repos/christophrrrrr/Noteezer --jq .id)
+for subject in "repo:christophrrrrr/Noteezer:ref:refs/heads/main" \
+               "repo:christophrrrrr@$owner_id/Noteezer@$repo_id:ref:refs/heads/main"; do
+  az identity federated-credential create --identity-name $PREFIX-github -g $RG \
+    -n "github-main$([[ $subject == *@* ]] && echo -ids)" --subject "$subject" \
+    --issuer https://token.actions.githubusercontent.com --audiences api://AzureADTokenExchange
+done
+
+# 7. GitHub secrets and variables, piped in so no value is printed.
+az identity show -n $PREFIX-github -g $RG --query clientId -o tsv | gh secret set AZURE_CLIENT_ID
+az account show --query tenantId -o tsv | gh secret set AZURE_TENANT_ID
+az account show --query id -o tsv | gh secret set AZURE_SUBSCRIPTION_ID
+printf '%s' "$INBOX_DB_PASSWORD" | gh secret set INBOX_DB_PASSWORD
+printf '%s' "$REMINDERS_DB_PASSWORD" | gh secret set REMINDERS_DB_PASSWORD
+printf '%s' "$SESSION_SECRET" | gh secret set SESSION_SECRET
+gh secret set GEMINI_API_KEY   # pasted when asked
+gh variable set PREFIX --body $PREFIX
+gh variable set RESOURCE_GROUP --body $RG
+gh variable set UI_STORAGE --body crintzieu2024ui
+
+# 9. Read access for the professors.
+for who in amartini@faculty.ie.edu bserra@faculty.ie.edu; do
+  MSYS_NO_PATHCONV=1 az role assignment create --assignee $who --role Reader \
+    --scope "$(az group show -n $RG --query id -o tsv)"
+done
+```
+
+Step 8 is the CD workflow above. Since then only the pipeline changes anything. To read a service's logs: `az containerapp logs show -n crintz-ieu2024-inbox -g rg-crintz-ieu2024 --follow` (add `--type system` for start-up and probe events).
 
 ## System description
 
