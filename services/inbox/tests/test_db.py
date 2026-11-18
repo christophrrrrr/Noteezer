@@ -1,6 +1,6 @@
 import pytest
 
-from app.db import IntegrityError, Row, _placeholders, connect
+from app.db import IntegrityError, Row, _placeholders, connect, settings
 
 USER = "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)"
 STAMP = "2026-09-26T00:00:00+00:00"
@@ -94,3 +94,27 @@ def test_rows_read_by_name_or_position() -> None:
 
 def test_placeholders_become_pymssql_style_and_keep_percent_signs() -> None:
     assert _placeholders("SELECT '100%' WHERE a = ? AND b = ?") == "SELECT '100%%' WHERE a = %s AND b = %s"
+
+
+def test_database_url_is_read_with_an_encoded_password(monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "mssql://inbox:p%40ss%2Fw0rd@db.example.net:1444/noteezer_inbox")
+    assert settings() == {
+        "server": "db.example.net",
+        "port": "1444",
+        "user": "inbox",
+        "password": "p@ss/w0rd",
+        "database": "noteezer_inbox",
+    }
+    assert settings("other")["database"] == "other"
+    monkeypatch.setenv("DATABASE_URL", "mssql://inbox:x@db.example.net/noteezer_inbox")
+    assert settings()["port"] == "1433"
+
+
+@pytest.mark.parametrize(
+    ("url", "problem"),
+    [("", "not set"), ("postgres://u:p@h/d", "mssql://"), ("mssql://u:p@h:1433/", "names no database")],
+)
+def test_a_missing_or_wrong_database_url_is_refused(monkeypatch, url: str, problem: str) -> None:
+    monkeypatch.setenv("DATABASE_URL", url)
+    with pytest.raises(RuntimeError, match=problem):
+        settings()

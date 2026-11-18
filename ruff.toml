@@ -1,0 +1,11 @@
+# One lint setup for both services, used by CI and by `ruff check services`.
+line-length = 120
+target-version = "py313"
+
+[lint]
+# pycodestyle errors and warnings, pyflakes (unused or undefined names), and
+# sorted imports.
+select = ["E", "W", "F", "I"]
+
+[lint.isort]
+known-first-party = ["app", "tests"]

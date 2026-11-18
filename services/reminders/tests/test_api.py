@@ -65,11 +65,12 @@ def test_errors_have_their_own_codes(client) -> None:
     assert client.delete("/reminders/10", headers=_as(1, "inbox")).status_code == 204
 
 
-def test_health_reports_the_database(client, monkeypatch) -> None:
-    assert client.get("/health").json() == {"ok": True, "database": "up"}
-    monkeypatch.setenv("DB_PORT", "1")
+def test_health_reports_the_database_and_the_version(client, monkeypatch) -> None:
+    monkeypatch.setenv("GIT_SHA", "abc1234")
+    assert client.get("/health").json() == {"status": "ok", "db": "ok", "version": "abc1234"}
+    monkeypatch.setenv("DATABASE_URL", "mssql://nobody:wrong@127.0.0.1:1/nowhere")
     down = client.get("/health")
-    assert (down.status_code, down.json()) == (503, {"ok": False, "database": "down"})
+    assert (down.status_code, down.json()) == (503, {"status": "error", "db": "down", "version": "abc1234"})
 
 
 def test_every_response_carries_a_request_id(client) -> None:

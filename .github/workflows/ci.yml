@@ -1,0 +1,120 @@
+# CI: every push and every pull request (brief §5). A red job blocks the merge.
+#
+#   lint       ruff over both services, with the rules in ruff.toml
+#   test       each service's tests against a real SQL Server container, with
+#              coverage of its whole app; below 70% fails. Also fails when
+#              openapi.yaml no longer matches the code.
+#   contracts  system.yaml against system.schema.json, both OpenAPI files
+#              against the OpenAPI specification, and system.yaml against
+#              the code (scripts/check_system.py)
+#   build      both Docker images, exactly as they will ship; not pushed yet
+#
+# CI never touches Azure SQL. The CD workflow will call this one first
+# (workflow_call), so a deploy only happens after these jobs pass.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install ruff==0.17.4
+      - run: ruff check services scripts
+
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [inbox, reminders]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/${{ matrix.service }}/requirements*.txt
+
+      - name: Start SQL Server
+        # A throwaway container that only lives for this job. Its password is
+        # made up here and masked in the log, so no secret is stored anywhere.
+        run: |
+          password="$(openssl rand -hex 16)Ab1"
+          echo "::add-mask::$password"
+          docker run -d --name sql -p 1433:1433 \
+            -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$password" \
+            mcr.microsoft.com/mssql/server:2022-latest
+          echo "DATABASE_URL=mssql://sa:$password@localhost:1433/master" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 60); do
+            if docker exec -e SQLCMDPASSWORD="$password" sql \
+                 /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -Q "SELECT 1" -b > /dev/null 2>&1; then
+              echo "SQL Server is ready"; exit 0
+            fi
+            sleep 2
+          done
+          docker logs sql; exit 1
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Tests and coverage
+        # Settings in pyproject.toml; the threshold is repeated here so the
+        # gate is visible in the workflow. Inbox's tests also start the real
+        # reminders service as a process (the cross-seam test, ADR-9).
+        run: pytest --cov --cov-report=term --cov-fail-under=70
+
+      - name: openapi.yaml matches the code
+        run: python ../../scripts/openapi.py --check
+
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install check-jsonschema==0.39.0 openapi-spec-validator==0.9.0 PyYAML==6.0.3
+      - name: system.schema.json is a valid JSON Schema
+        run: check-jsonschema --check-metaschema system.schema.json
+      - name: system.yaml follows system.schema.json
+        run: check-jsonschema --schemafile system.schema.json system.yaml
+      - name: Both OpenAPI documents follow the OpenAPI specification
+        run: |
+          openapi-spec-validator services/inbox/openapi.yaml
+          openapi-spec-validator services/reminders/openapi.yaml
+      - name: system.yaml matches the code
+        run: python scripts/check_system.py
+
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [inbox, reminders]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the ${{ matrix.service }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          push: false
+          # Azure cannot pull GHCR images that carry a provenance manifest.
+          provenance: false
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: noteezer-${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}

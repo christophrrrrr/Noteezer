@@ -1,7 +1,7 @@
 # The whole system on one computer: SQL Server, a one-off job that creates the
 # two databases, the two services, and nginx serving the static UI.
 #
-#   copy .env.example .env      (then fill in the two secrets)
+#   copy .env.example .env      (then fill in the secrets)
 #   docker compose up --build
 #   open http://localhost:8080
 #
@@ -14,12 +14,13 @@ services:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
-      # Plain ${...} on purpose: a "${DB_PASSWORD:?message}" check reads to
-      # secret scanners like a password written in the file. Without a value,
-      # SQL Server refuses to start and says the password is too weak.
-      MSSQL_SA_PASSWORD: ${DB_PASSWORD}
+      # The administrator, used only by the healthcheck and db-init. The
+      # services log in as their own users. Plain ${...} on purpose: a
+      # "${VAR:?message}" check reads to secret scanners like a password
+      # written in the file. Without a value, SQL Server refuses to start.
+      MSSQL_SA_PASSWORD: ${SA_PASSWORD}
       # sqlcmd reads the password from here, so it never shows in a command line.
-      SQLCMDPASSWORD: ${DB_PASSWORD}
+      SQLCMDPASSWORD: ${SA_PASSWORD}
     volumes:
       - sqldata:/var/opt/mssql
     # No port is published: only the containers below can reach the database.
@@ -31,34 +32,42 @@ services:
       start_period: 20s
 
   db-init:
-    # Runs db/init.sql once and exits; the services wait for it.
+    # Runs db/init.sql once and exits; the services wait for it. It creates
+    # the databases and one login per service with these passwords.
     image: mcr.microsoft.com/mssql/server:2022-latest
     depends_on:
       sqlserver:
         condition: service_healthy
     environment:
-      SQLCMDPASSWORD: ${DB_PASSWORD}
+      SQLCMDPASSWORD: ${SA_PASSWORD}
+      INBOX_DB_PASSWORD: ${INBOX_DB_PASSWORD}
+      REMINDERS_DB_PASSWORD: ${REMINDERS_DB_PASSWORD}
     volumes:
       - ./db/init.sql:/db/init.sql:ro
     entrypoint: ["/opt/mssql-tools18/bin/sqlcmd", "-C", "-S", "sqlserver", "-U", "sa", "-b", "-i", "/db/init.sql"]
     restart: "no"
 
   reminders:
-    build: ./services/reminders
+    build:
+      context: ./services/reminders
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
     depends_on:
       db-init:
         condition: service_completed_successfully
     environment:
-      DB_SERVER: sqlserver
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: noteezer_reminders
+      # Its own login, which can reach only noteezer_reminders.
+      DATABASE_URL: mssql://reminders:${REMINDERS_DB_PASSWORD}@sqlserver:1433/noteezer_reminders
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
       CORS_ORIGINS: http://localhost:8080
     ports:
       - "127.0.0.1:8001:8001"
 
   inbox:
-    build: ./services/inbox
+    build:
+      context: ./services/inbox
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
     depends_on:
       db-init:
         condition: service_completed_successfully
@@ -67,9 +76,7 @@ services:
       reminders:
         condition: service_started
     environment:
-      DB_SERVER: sqlserver
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: noteezer_inbox
+      DATABASE_URL: mssql://inbox:${INBOX_DB_PASSWORD}@sqlserver:1433/noteezer_inbox
       SESSION_SECRET: ${SESSION_SECRET}
       REMINDERS_URL: http://reminders:8001
       CORS_ORIGINS: http://localhost:8080
@@ -79,7 +86,7 @@ services:
       - "127.0.0.1:8000:8000"
 
   ui:
-    image: nginx:1.27-alpine
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     depends_on:
       - inbox
     environment:

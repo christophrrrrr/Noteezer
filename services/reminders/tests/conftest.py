@@ -1,29 +1,28 @@
 """Tests run against a real SQL Server, like the inbox service's tests.
 
-DB_SERVER, DB_PORT, DB_USER, and DB_PASSWORD come from the environment or
-services/reminders/.env (no password is written in code). A fresh database
-named TEST_DB_NAME is created for each run and emptied before every test.
+DATABASE_URL comes from the environment or services/reminders/.env (no
+password is written in code), with a login that may create databases. Its
+database name is ignored: a fresh database named TEST_DB_NAME is created for
+each run and emptied before every test.
 """
 
 import os
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import pymssql
 import pytest
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-if not os.environ.get("DB_PASSWORD"):
-    pytest.exit(
-        "Set DB_PASSWORD (in the environment or services/reminders/.env) to the SQL Server password.", returncode=2
-    )
-os.environ["DB_NAME"] = os.environ.get("TEST_DB_NAME", "noteezer_reminders_unit")
+if not os.environ.get("DATABASE_URL"):
+    pytest.exit("Set DATABASE_URL (in the environment or services/reminders/.env); see the README.", returncode=2)
+TEST_DB = os.environ.get("TEST_DB_NAME", "noteezer_reminders_unit")
+os.environ["DATABASE_URL"] = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path="/" + TEST_DB))
 os.environ["SESSION_SECRET"] = "test-secret"
 
 from app.db import connect  # noqa: E402  (needs the variables above)
 from app.migrate import migrate  # noqa: E402
-
-TEST_DB = os.environ["DB_NAME"]
 
 
 def _server():

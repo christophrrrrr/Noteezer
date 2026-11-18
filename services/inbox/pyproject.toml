@@ -1,0 +1,14 @@
+# Test and coverage settings, the same locally and in CI: `pytest --cov`.
+# Lint settings are in ruff.toml at the repository root.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+# The whole service, except the few lines that start the web server.
+source = ["app"]
+omit = ["app/__main__.py"]
+
+[tool.coverage.report]
+fail_under = 70
+skip_covered = true
+show_missing = true

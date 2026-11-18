@@ -18,6 +18,8 @@ import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 request_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_id", default=None)
 
@@ -53,6 +55,33 @@ def install(app: FastAPI, service: str) -> None:
             allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
             expose_headers=["X-Request-ID"],
         )
+
+
+def health_route(app: FastAPI, connect, check_read_write, database_errors: tuple[type[Exception], ...]) -> None:
+    """GET /health: 200 when this service can read and write its own database.
+
+    It never asks the other service: a service is healthy when it can do its
+    own work. "version" is the git commit the image was built from.
+    """
+
+    @app.get("/health", response_model=Health, responses={503: {"model": Health}})
+    def health() -> JSONResponse:
+        version = os.environ.get("GIT_SHA", "dev")
+        try:
+            connection = connect(attempts=1)
+            try:
+                check_read_write(connection)
+            finally:
+                connection.close()
+        except (*database_errors, RuntimeError):
+            return JSONResponse({"status": "error", "db": "down", "version": version}, status_code=503)
+        return JSONResponse({"status": "ok", "db": "ok", "version": version})
+
+
+class Health(BaseModel):
+    status: str
+    db: str
+    version: str
 
 
 def cors_origins() -> list[str]:
