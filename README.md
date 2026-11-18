@@ -38,7 +38,7 @@ Without Gemini, times come only from the picker. With Gemini, a line that starts
 ## In this assignment
 
 - Two services in Python with FastAPI, inbox and reminders, each with its own SQL Server database (ADR-6, ADR-7). Azure SQL once deployed.
-- A static UI in `ui/`: plain HTML, CSS, and JavaScript with no build step, calling both services with a bearer token (ADR-8).
+- A static UI in `ui/`: plain HTML, CSS, and JavaScript with no build step, calling both services with a bearer token (ADR-6).
 - Due reminders appear at the top when you open the app. Snooze and done are supported.
 - A dark page in the style of Notion. Folders are in a sidebar, which becomes a drawer on a phone. Notes run from oldest to newest like a chat, with the newest just above the capture bar and due reminders pinned on top.
 - Minimal accounts: register, log in, and log out with email and password. Not a third feature domain.
@@ -51,17 +51,17 @@ Push notifications to the phone are not built (ADR-5). The in-process background
 
 ## Run
 
-Noteezer is a static UI and two services (ADR-6, ADR-7, ADR-8). **inbox** (`services/inbox`, port 8000) is a JSON API under `/api` for accounts, lines, folders, sorting, images, and link previews. **reminders** (`services/reminders`, port 8001) stores reminder times and decides when one is due. Each has its own database. The **UI** (`ui/`, port 8080) is plain files that call both: inbox for everything, and reminders directly for done and snooze. Inbox calls reminders over HTTP with a 2 second timeout, and keeps working without times when reminders is down.
+Noteezer is a static UI and two services (ADR-6). **inbox** (`services/inbox`, port 8000) is a JSON API under `/api` for accounts, lines, folders, sorting, images, and link previews. **reminders** (`services/reminders`, port 8001) stores reminder times and decides when one is due. Each has its own database. The **UI** (`ui/`, port 8080) is plain files that call both: inbox for everything, and reminders directly for done and snooze. Inbox calls reminders over HTTP with a 2 second timeout, and keeps working without times when reminders is down.
 
 ### Everything at once, with Docker
 
-Docker Desktop has to be running. Copy `.env.example` to `.env` (git ignores it) and fill in `DB_PASSWORD` (8+ characters with upper case, lower case, digits, and a symbol; SQL Server refuses weaker ones) and `SESSION_SECRET` (`python -c "import secrets; print(secrets.token_hex(32))"` makes one). Then:
+Docker Desktop has to be running. Copy `.env.example` to `.env` (git ignores it) and fill in `SA_PASSWORD`, `INBOX_DB_PASSWORD`, and `REMINDERS_DB_PASSWORD` (8+ characters with upper case, lower case, and digits; SQL Server refuses weaker ones, and `python -c "import secrets; print(secrets.token_hex(16) + 'Ab1')"` makes one) and `SESSION_SECRET` (`python -c "import secrets; print(secrets.token_hex(32))"` makes one). Then:
 
 ```
 docker compose up --build
 ```
 
-Open `http://localhost:8080`. Compose starts SQL Server, waits until it answers, runs `db/init.sql` once to create the two databases, starts reminders and inbox (each applies its own migrations), and serves `ui/` with nginx. nginx writes `config.js` from `INBOX_URL` and `REMINDERS_URL` and sends a Content-Security-Policy that only lets the page call those two addresses. Only ports 8080, 8000, and 8001 are published, all on `127.0.0.1`; the database is reachable only from the other containers. `docker compose down` stops everything and keeps the data; `docker compose down -v` deletes it too.
+Open `http://localhost:8080`. Compose starts SQL Server, waits until it answers, runs `db/init.sql` to create the two databases and one login per service (`inbox` can open only `noteezer_inbox`, `reminders` only `noteezer_reminders`), starts reminders and inbox, each logged in as its own user and applying its own migrations (ADR-7), and serves `ui/` with nginx. nginx writes `config.js` from `INBOX_URL` and `REMINDERS_URL` and sends a Content-Security-Policy that only lets the page call those two addresses. Only ports 8080, 8000, and 8001 are published, all on `127.0.0.1`; the database is reachable only from the other containers. `docker compose down` stops everything and keeps the data; `docker compose down -v` deletes it too.
 
 If an antivirus or a company proxy re-signs HTTPS on your computer (Norton does), `pip install` inside the image build fails with `CERTIFICATE_VERIFY_FAILED`. Export that root certificate as a PEM file outside the repo and add a git-ignored `docker-compose.override.yml`:
 
@@ -85,22 +85,20 @@ The Dockerfiles use it only for the `pip install` step, so it never lands in an 
 The tests and a service started by hand need a SQL Server. Locally that is a container (Docker Desktop has to be running). Choose a password of your own (at least 8 characters with upper case, lower case, and digits; SQL Server refuses weaker ones) and never commit it. In PowerShell:
 
 ```
-$env:DB_PASSWORD = "<your password>"
-docker run -d --name noteezer-sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=$env:DB_PASSWORD -p 127.0.0.1:1433:1433 mcr.microsoft.com/mssql/server:2022-latest
-docker exec noteezer-sql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $env:DB_PASSWORD -Q "CREATE DATABASE noteezer_inbox; ALTER DATABASE noteezer_inbox SET READ_COMMITTED_SNAPSHOT ON; CREATE DATABASE noteezer_reminders; ALTER DATABASE noteezer_reminders SET READ_COMMITTED_SNAPSHOT ON"
+$env:SA_PASSWORD = "<your password>"
+docker run -d --name noteezer-sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=$env:SA_PASSWORD -p 127.0.0.1:1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+docker exec noteezer-sql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $env:SA_PASSWORD -Q "CREATE DATABASE noteezer_inbox; ALTER DATABASE noteezer_inbox SET READ_COMMITTED_SNAPSHOT ON; CREATE DATABASE noteezer_reminders; ALTER DATABASE noteezer_reminders SET READ_COMMITTED_SNAPSHOT ON"
 ```
 
-The container only listens on this computer (`127.0.0.1`). Each service reads a git-ignored `.env` file in its folder. Both need the same `SESSION_SECRET`, a long random value (`python -c "import secrets; print(secrets.token_hex(32))"` makes one):
+The container only listens on this computer (`127.0.0.1`). Each service reads a git-ignored `.env` file in its folder, with its connection string in `DATABASE_URL` (`mssql://user:password@host:port/database`; a password with `@`, `:` or `/` in it is written percent-encoded). By hand it is simplest to use `sa`; compose uses the per-service logins. Both need the same `SESSION_SECRET`, a long random value (`python -c "import secrets; print(secrets.token_hex(32))"` makes one):
 
 ```
 # services/inbox/.env
-DB_PASSWORD=<your password>
-DB_NAME=noteezer_inbox
+DATABASE_URL=mssql://sa:<your password>@localhost:1433/noteezer_inbox
 SESSION_SECRET=<the same long random value>
 
 # services/reminders/.env
-DB_PASSWORD=<your password>
-DB_NAME=noteezer_reminders
+DATABASE_URL=mssql://sa:<your password>@localhost:1433/noteezer_reminders
 SESSION_SECRET=<the same long random value>
 ```
 
@@ -122,17 +120,13 @@ python -m app
 python -m http.server 8080 -d ui
 ```
 
-Each process listens on `0.0.0.0`. On start it applies the numbered SQL files in its `migrations` folder that its database has not seen yet, each once and in its own transaction, and records them in `schema_migrations`. `python -m app.migrate` does the same by hand. A file that was applied is never edited; a change is a new, higher number. Both services log one line per request with a request id; inbox passes the id on to reminders in `X-Request-ID`, so one id finds a request in both logs. `GET /health` on either answers `{"ok": true, "database": "up"}`, or 503 when its database cannot be reached. Everything else is configured with environment variables:
+Each process listens on `0.0.0.0`. On start it applies the numbered SQL files in its `migrations` folder that its database has not seen yet, each once and in its own transaction, and records them in `schema_migrations`. `python -m app.migrate` does the same by hand. Every file applied is logged (`Applied migration 001_init.sql`), and a start with nothing to do logs that the database is up to date. A file that was applied is never edited; a change is a new, higher number. Both services log one line per request with a request id; inbox passes the id on to reminders in `X-Request-ID`, so one id finds a request in both logs. `GET /health` on either reads from and writes to its database (the write is rolled back) and answers `{"status": "ok", "db": "ok", "version": "<commit>"}`, or 503 with `"status": "error", "db": "down"` when it cannot. The version is the commit the image was built from (`GIT_SHA`), `dev` outside an image. Everything else is configured with environment variables:
 
 | Variable | Default | What it does |
 |---|---|---|
 | `PORT` | `8000` inbox, `8001` reminders | Port to listen on. |
-| `DB_SERVER` | `localhost` | SQL Server host. |
-| `DB_PORT` | `1433` | SQL Server port. |
-| `DB_USER` | `sa` | SQL login. |
-| `DB_PASSWORD` | empty | Password for that login. Required. |
-| `DB_NAME` | none | Required. The service's own database. It must exist; the migrations create the tables in it. |
-| `SESSION_SECRET` | none | Required, the same in both services. Signs and checks the login token (ADR-7). |
+| `DATABASE_URL` | none | Required. `mssql://user:password@host:port/database` for the service's own database (port 1433 when left out). The database must exist; the migrations create the tables in it. |
+| `SESSION_SECRET` | none | Required, the same in both services. Signs and checks the login token (ADR-6). |
 | `CORS_ORIGINS` | empty | Both. Comma-separated sites allowed to call the service from a browser: the UI's address, `http://localhost:8080` locally. Empty allows none. |
 | `REMINDERS_URL` | `http://127.0.0.1:8001` | Inbox only. Where the reminders service is. |
 | `REMINDERS_TIMEOUT` | `2` | Inbox only. Seconds to wait for reminders before carrying on without times. |
@@ -140,6 +134,7 @@ Each process listens on `0.0.0.0`. On start it applies the numbered SQL files in
 | `SORTER` | `auto` | `auto` uses Gemini when a key is set and the rules otherwise, `rules` never calls Gemini, `gemini` asks for it. |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Model for text lines. |
 | `GEMINI_IMAGE_MODEL` | `gemini-3.8-flash` | Model for lines with an image. |
+| `GIT_SHA` | `dev` | Set when the image is built. Shown by `/health` as the version. |
 
 Variables already set in the environment win over the `.env` file. `GEMINI_API_KEY=...` can go in `services/inbox/.env` too. A free key comes from Google AI Studio. On the free tier Google may use the notes it sorts to improve its models.
 
@@ -151,20 +146,47 @@ Open `http://localhost:8080`, create an account, and save a line. A line that st
 
 Noteezer installs as an app on Android (Chrome) and iPhone (Safari, Add to Home Screen). Installing and sharing need HTTPS. In Assignment 1 that came from `tailscale serve` on the laptop; with a separate UI and two services that is three addresses, so the phone uses the Azure address once Noteezer is deployed there. Open it, log in, and in Chrome choose Install app (or Add to Home screen). On Android, Noteezer then appears in the share sheet: sharing a YouTube video, a page, or a screenshot saves it to Unsorted, where it is sorted like any other line.
 
-The app is a manifest (`ui/manifest.webmanifest`) and a service worker (`ui/sw.js`). The worker caches only the page, styles, script, and icons, and shows an offline page when nothing can be reached. It never touches calls to the services, so notes and images are never cached on the phone. The share sheet posts to `/share` on the UI's address; the worker keeps that post and opens the app, which sends it to inbox with the token. The token lasts 90 days, so the installed app stays signed in. Logging out makes the browser forget it (ADR-8).
+The app is a manifest (`ui/manifest.webmanifest`) and a service worker (`ui/sw.js`). The worker caches only the page, styles, script, and icons, and shows an offline page when nothing can be reached. It never touches calls to the services, so notes and images are never cached on the phone. The share sheet posts to `/share` on the UI's address; the worker keeps that post and opens the app, which sends it to inbox with the token. The token lasts 90 days, so the installed app stays signed in. Logging out makes the browser forget it (ADR-6).
 
 ## Tests
 
-Each service has its own tests. They never call Gemini or fetch real pages; they use fakes. They do run against a real SQL Server, the container from the section above: each run creates fresh test databases, migrates them, empties them before every test, and drops them at the end. `DB_SERVER`, `DB_PORT`, `DB_USER`, and `DB_PASSWORD` point at the server, read from the environment or the service's `.env`; without `DB_PASSWORD` the run stops with a message. The tests set their own `SESSION_SECRET`.
+Each service has its own tests. They never call Gemini or fetch real pages; they use fakes. They do run against a real SQL Server, the container from the section above: each run creates fresh test databases, migrates them, empties them before every test, and drops them at the end. `DATABASE_URL` points at the server with a login that may create databases (`sa` locally; the database part of the URL is ignored), read from the environment or the service's `.env`; without it the run stops with a message. The test tools are in `requirements-dev.txt` (`pip install -r requirements-dev.txt`), so the images install only `requirements.txt`. The tests set their own `SESSION_SECRET`.
 
 The inbox tests start the real reminders service as a second process, on a free port with its own test database, so every reminder an inbox test saves crosses the seam over real HTTP. `tests/test_seam.py` also points inbox at a reminders that is down, slow, or answering with errors:
 
 ```
 cd services\inbox
-pytest --cov=app.api --cov=app.classify --cov=app.inbox --cov=app.users --cov=app.passwords --cov=app.folders --cov=app.sorting --cov=app.links --cov=app.gemini --cov=app.images --cov=app.db --cov=app.migrate --cov=app.tokens --cov=app.reminders_client --cov=app.middleware --cov-report=term-missing
+pytest --cov
 
 cd services\reminders
-pytest --cov=app --cov-report=term-missing
+pytest --cov
 ```
 
-Inbox is 128 tests at 97% of those modules. `tests/test_api.py` drives the JSON API the UI uses, including that one person never reaches another's lines, and `tests/test_ui_files.py` checks the UI's files without a browser: the manifest and icons, that every file the page loads exists, that the page has no inline script, and that note text never becomes HTML. Reminders is 23 tests at 88% of the whole service, with the rules (`reminders.py`) and tokens at 100%.
+Coverage is measured on each service's whole `app` (settings in its `pyproject.toml`), and the run fails below 70%. Inbox is 132 tests at 97%. `tests/test_api.py` drives the JSON API the UI uses, including that one person never reaches another's lines, and `tests/test_ui_files.py` checks the UI's files without a browser: the manifest and icons, that every file the page loads exists, that the page has no inline script, and that note text never becomes HTML. Reminders is 23 tests at 91%, with the rules (`reminders.py`) and tokens at 100%.
+
+`ruff check services scripts` lints both services with the rules in `ruff.toml`.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push and pull request, and a red job blocks the merge (ADR-9):
+
+- **lint**: ruff.
+- **test**, once per service: starts a throwaway SQL Server container in the job, runs the tests with coverage (below 70% fails), and checks that the committed `openapi.yaml` still matches the code.
+- **contracts**: validates `system.yaml` against `system.schema.json` and both `openapi.yaml` files against the OpenAPI specification, then runs `scripts/check_system.py`, which checks that every variable the code reads is listed in `system.yaml` and every endpoint inbox calls exists in reminders' `openapi.yaml`.
+- **build**: both Docker images, with the commit SHA as their version.
+
+CI never touches Azure SQL.
+
+## System description
+
+`system.yaml` describes the whole system: both services, their variables, what inbox calls on reminders and what happens when that fails, and the Azure names. `system.schema.json` is its schema. Each service's `openapi.yaml` is generated from the code, never edited by hand. After changing a route, regenerate it and commit it with the change:
+
+```
+cd services\inbox
+python ..\..\scripts\openapi.py
+
+cd services\reminders
+python ..\..\scripts\openapi.py
+```
+
+From the repository root, `python scripts/check_system.py` runs the same check as CI.
