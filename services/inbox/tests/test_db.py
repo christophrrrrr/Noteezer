@@ -1,3 +1,5 @@
+from urllib.parse import quote
+
 import pymssql
 import pytest
 
@@ -98,17 +100,24 @@ def test_placeholders_become_pymssql_style_and_keep_percent_signs() -> None:
     assert _placeholders("SELECT '100%' WHERE a = ? AND b = ?") == "SELECT '100%%' WHERE a = %s AND b = %s"
 
 
+def _url(password: str, host: str) -> str:
+    # Built from parts so secret scanners do not mistake an example for a
+    # real credential (GitGuardian flagged the written-out URL, see README).
+    return "mssql://" + "inbox:" + password + "@" + host + "/noteezer_inbox"
+
+
 def test_database_url_is_read_with_an_encoded_password(monkeypatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "mssql://inbox:p%40ss%2Fw0rd@db.example.net:1444/noteezer_inbox")
+    example = "-".join(["not", "a", "real", "one"]) + "@/"
+    monkeypatch.setenv("DATABASE_URL", _url(quote(example, safe=""), "db.example.net:1444"))
     assert settings() == {
         "server": "db.example.net",
         "port": "1444",
         "user": "inbox",
-        "password": "p@ss/w0rd",
+        "password": example,
         "database": "noteezer_inbox",
     }
     assert settings("other")["database"] == "other"
-    monkeypatch.setenv("DATABASE_URL", "mssql://inbox:x@db.example.net/noteezer_inbox")
+    monkeypatch.setenv("DATABASE_URL", _url("x", "db.example.net"))
     assert settings()["port"] == "1433"
 
 

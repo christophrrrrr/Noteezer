@@ -177,6 +177,31 @@ Coverage is measured on each service's whole `app` (settings in its `pyproject.t
 
 CI never touches Azure SQL.
 
+## Data on Azure
+
+The notes from Assignment 1 were moved from `data/noteezer.db` into the deployed system once, through the services' APIs (ADR-7):
+
+```
+NOTEEZER_PASSWORD=<new password> python scripts/import_a1.py --inbox https://<inbox address> --reminders https://<reminders address>
+```
+
+It recreates the account, folders, lines, ticks, and reminders, and refuses to run into an account that already has lines. The password comes from the environment, never the command line. It needs `httpx` (in `services/inbox/requirements.txt`).
+
+A new account starts with an Examples folder holding three lines that show how a line gets its kind. Seeding adds nothing to an account that already has that folder, so running it again never doubles the lines; `POST /api/register` with `"examples": false` skips it.
+
+### Migration 002
+
+`services/reminders/migrations/002_snoozed_count.sql` adds `snoozed_count` to `reminders`, a table that already held data on Azure. Existing rows keep every value; the column starts at 0, and a reminder that was snoozed at that moment is backfilled to 1. The evidence is in [docs/evidence](docs/evidence): the rows before (`migration-002-before.txt`), the startup log line, and the rows after (`migration-002-after.txt`).
+
+## Secret scanning incidents
+
+GitGuardian scans every pull request. No real credential has been pushed, but both alerts are recorded here, as the brief asks for any leak.
+
+- **2026-11-13, PR #9: a local test password.** The password of the SQL Server container on my laptop was written as a default in `tests/conftest.py` and in this README. It only ever protected a container listening on `127.0.0.1`. The same day it was removed from both files (commit 7318560), the tests started reading it from the environment or a git-ignored `.env`, and the container was recreated with a new random password, so the old value works nowhere. History was not rewritten, because pushed commits keep their timestamps. GitGuardian's incident was resolved.
+- **2026-11-18, PR #12: a false positive.** `tests/test_db.py` contained the example connection string `mssql://inbox:p%40ss%2Fw0rd@db.example.net:1444/...`, which checks that a percent-encoded password is decoded. It was never a password anywhere, and `example.net` is reserved for examples. On 2026-11-19 the test was changed to build its example from parts so scanners stop matching it, and the incident was marked as a false positive.
+
+Real passwords live only in git-ignored `.env` files on the laptop and in GitHub Actions secrets.
+
 ## Azure
 
 Live at **https://crintzieu2024ui.z1.web.core.windows.net**. The UI is a Storage static website, both services are Container Apps that scale to zero, and each has a serverless Azure SQL database on the free offer (ADR-8). After the first request following a quiet period, the app may show "starting up" for up to a minute while the databases resume.

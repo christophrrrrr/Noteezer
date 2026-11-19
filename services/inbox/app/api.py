@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from app.classify import ClassificationError
 from app.db import connect
+from app.examples import seed_examples
 from app.folders import (
     FolderError,
     create_folder,
@@ -87,6 +88,9 @@ class Credentials(BaseModel):
     email: str
     password: str
     timezone: str = ""
+    # Register only: start the account with the example lines (app/examples.py).
+    # The import of old notes and most tests turn it off.
+    examples: bool = True
 
 
 class Token(BaseModel):
@@ -160,6 +164,8 @@ def register_routes(app: FastAPI) -> None:
         try:
             user_id = register_user(connection, body.email, body.password, _now())
             set_timezone(connection, user_id, body.timezone)
+            if body.examples:
+                seed_examples(connection, user_id, _now())
         except AccountError as error:
             raise HTTPException(400, str(error)) from None
         finally:

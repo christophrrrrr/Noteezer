@@ -1,0 +1,19 @@
+# Azure SQL before migration 002, taken 2026-11-19T11:50:39Z
+# Server crintz-ieu2024-sql, read with the admin login while the laptop's IP was allowed.
+
+## crintz-ieu2024-reminders-db: applied migrations
+version applied_at
+------- ----------
+001_init 2026-11-18T12:49:09.934122+00:00
+
+## crintz-ieu2024-reminders-db: reminders (columns before 002)
+item_id user_id remind_at status snoozed_until repeat_daily repeat_until
+------- ------- --------- ------ ------------- ------------ ------------
+2 1 2020-01-01T08:00:00+00:00 snoozed 2026-11-18T13:51:28.001335+00:00 0 NULL
+5 2 2026-09-28T14:18:00+00:00 done NULL 0 NULL
+13 2 2026-10-05T08:13:00+00:00 due NULL 1 2026-10-10
+
+## crintz-ieu2024-inbox-db: rows per table
+users folders items item_folders
+----- ------- ----- ------------
+2 8 12 9

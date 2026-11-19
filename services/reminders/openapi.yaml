@@ -335,6 +335,10 @@ components:
           - type: 'null'
           title: Repeat Until
           description: Last day of a daily reminder, YYYY-MM-DD.
+        snoozed_count:
+          type: integer
+          title: Snoozed Count
+          description: How often it was snoozed (since migration 002).
       type: object
       required:
       - item_id
@@ -343,6 +347,7 @@ components:
       - snoozed_until
       - repeat_daily
       - repeat_until
+      - snoozed_count
       title: Reminder
     ReminderTime:
       properties:

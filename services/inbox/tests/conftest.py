@@ -196,7 +196,10 @@ def _rules_only(monkeypatch):
 
 def sign_in(client, email: str = "a@example.com", timezone: str = "") -> str:
     """Registers through the API and sends the token on every later request."""
-    answer = client.post("/api/register", json={"email": email, "password": "password1", "timezone": timezone})
+    answer = client.post(
+        "/api/register",
+        json={"email": email, "password": "password1", "timezone": timezone, "examples": False},
+    )
     assert answer.status_code == 201, answer.text
     token = answer.json()["token"]
     client.headers["Authorization"] = f"Bearer {token}"

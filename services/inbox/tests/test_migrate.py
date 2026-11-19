@@ -85,5 +85,5 @@ def test_split_batches_ignores_go_inside_a_line() -> None:
 def test_both_services_ship_a_first_migration(scratch) -> None:
     assert [path.name for path in migration_files(MIGRATIONS_DIR)][0] == "001_init.sql"
     reminders_dir = MIGRATIONS_DIR.parents[1] / "reminders" / "migrations"
-    assert migrate(scratch, reminders_dir) == ["001_init.sql"]
+    assert migrate(scratch, reminders_dir)[0] == "001_init.sql"
     assert "reminders" in _tables(scratch)

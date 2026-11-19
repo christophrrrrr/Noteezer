@@ -427,6 +427,7 @@ def list_items(
                 "status": reminder.get("status"),
                 "repeat_daily": bool(reminder.get("repeat_daily")),
                 "repeat_until": reminder.get("repeat_until"),
+                "snoozed_count": int(reminder.get("snoozed_count") or 0),
                 "reminder_unavailable": unavailable and row["kind"] == "reminder",
                 "tags": tags_by_item[int(row["id"])],
             }
