@@ -1,121 +1,174 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "system.schema.json",
-  "title": "Noteezer system description",
-  "$comment": "Written from the example and rules in the Assignment 2 brief, section 8a, because the provided file was not found. Replace it with the course's file if that turns up; system.yaml follows the same fields.",
+  "$id": "sdd-assignment-2/system.schema.json",
+  "title": "SDD Assignment 2 system description (system.yaml)",
+  "description": "Describes every service in the system, how it is configured, what it calls, and where it is deployed on Azure. Must match the code at the graded commit.",
   "type": "object",
-  "required": ["student", "prefix", "public_url", "ui", "azure", "services"],
   "additionalProperties": false,
+  "required": ["student", "prefix", "public_url", "ui", "azure", "services"],
   "properties": {
     "student": {
-      "description": "IE username, the part of the email before @.",
+      "description": "IE username: the part of your IE email before @.",
       "type": "string",
-      "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)*$"
+      "pattern": "^[a-z0-9._-]+$",
+      "examples": ["jsmith.ieu2023"]
     },
     "prefix": {
-      "description": "The username with dots replaced by hyphens; every Azure resource starts with it.",
+      "description": "Azure name prefix: the username with dots replaced by hyphens.",
       "type": "string",
-      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+      "pattern": "^[a-z0-9-]+$",
+      "examples": ["jsmith-ieu2023"]
     },
     "public_url": {
-      "description": "The storage account's static website endpoint.",
+      "description": "The live HTTPS URL of the UI (its storage static website endpoint).",
       "type": "string",
-      "pattern": "^https://[a-z0-9]+\\.z[0-9]+\\.web\\.core\\.windows\\.net/?$"
+      "pattern": "^https://"
     },
     "ui": {
+      "description": "The static UI, deployed to an Azure Storage static website.",
       "type": "object",
-      "required": ["path", "storage_account", "calls"],
       "additionalProperties": false,
+      "required": ["path", "storage_account", "calls"],
       "properties": {
-        "path": { "type": "string" },
-        "storage_account": { "type": "string", "pattern": "^[a-z0-9]{3,24}$" },
+        "path": { "description": "Folder of the UI in the repository.", "type": "string", "pattern": "^ui/?$" },
+        "storage_account": { "description": "Name of the storage account serving the UI: the prefix without hyphens, followed by ui (a digit may be added if the name is taken).", "type": "string", "pattern": "^[a-z0-9]{3,24}$" },
         "calls": {
-          "description": "Services the browser calls directly.",
+          "description": "Services the UI calls from the browser.",
           "type": "array",
-          "items": { "type": "string" },
-          "uniqueItems": true
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string" }
         }
       }
     },
     "azure": {
+      "description": "Shared Azure resources of the system. Every name starts with the prefix.",
       "type": "object",
-      "required": ["resource_group", "container_apps_environment", "sql_server", "registry"],
       "additionalProperties": false,
+      "required": ["resource_group", "container_apps_environment", "sql_server", "registry"],
       "properties": {
-        "resource_group": { "type": "string", "pattern": "^rg-" },
-        "container_apps_environment": { "type": "string" },
-        "sql_server": { "type": "string" },
-        "registry": { "type": "string" }
+        "resource_group": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "container_apps_environment": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "sql_server": {
+          "description": "Azure SQL logical server hosting every service's database, without .database.windows.net.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$"
+        },
+        "registry": {
+          "description": "Image registry and namespace, e.g. ghcr.io/<github-user>.",
+          "type": "string"
+        }
       }
     },
     "services": {
-      "description": "Exactly two domain services.",
+      "description": "The two domain services, keyed by their names in docker-compose.yml.",
       "type": "object",
       "minProperties": 2,
       "maxProperties": 2,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
       "additionalProperties": { "$ref": "#/$defs/service" }
     }
   },
   "$defs": {
     "service": {
       "type": "object",
-      "required": ["description", "path", "openapi", "port_default", "health", "migrations", "env", "calls", "azure"],
       "additionalProperties": false,
+      "required": ["path", "openapi", "port_default", "migrations", "env", "azure"],
       "properties": {
         "description": { "type": "string" },
-        "path": { "type": "string", "pattern": "^services/" },
-        "openapi": { "type": "string", "pattern": "\\.(yaml|json)$" },
-        "port_default": { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "health": { "type": "string", "pattern": "^/" },
-        "migrations": { "type": "string" },
+        "path": {
+          "description": "Folder of the service in the repository.",
+          "type": "string",
+          "pattern": "^services/[a-z0-9-]+/?$"
+        },
+        "openapi": {
+          "description": "Path to the service's OpenAPI document, relative to the repository root.",
+          "type": "string"
+        },
+        "port_default": {
+          "description": "Port used when PORT is not set.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "health": {
+          "description": "Health endpoint path.",
+          "type": "string",
+          "default": "/health"
+        },
+        "migrations": {
+          "description": "Folder with the versioned migrations, relative to the repository root.",
+          "type": "string"
+        },
         "env": {
-          "description": "Every environment variable the service reads.",
+          "description": "Every environment variable the service reads, PORT and DATABASE_URL included.",
           "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/variable" }
+          "required": ["PORT", "DATABASE_URL"],
+          "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/envVar" }
         },
         "calls": {
-          "description": "Calls this service makes to the other one.",
+          "description": "Calls this service makes to other services in the system.",
           "type": "array",
           "items": { "$ref": "#/$defs/call" }
         },
         "azure": {
           "type": "object",
-          "required": ["container_app", "sql_database"],
           "additionalProperties": false,
+          "required": ["container_app", "sql_database"],
           "properties": {
-            "container_app": { "type": "string" },
-            "sql_database": { "type": "string" }
+            "container_app": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,30}[a-z0-9]$" },
+            "sql_database": {
+              "description": "The service's own serverless Azure SQL database.",
+              "type": "string",
+              "pattern": "^[a-z0-9-]+$"
+            }
           }
         }
       }
     },
-    "variable": {
+    "envVar": {
       "type": "object",
-      "required": ["description"],
       "additionalProperties": false,
+      "required": ["description"],
       "properties": {
-        "default": { "type": ["string", "number", "boolean"] },
-        "secret": { "type": "boolean" },
-        "description": { "type": "string" }
+        "description": { "type": "string" },
+        "default": {
+          "description": "Value used when the variable is not set. Omit only for secrets.",
+          "type": ["string", "number", "boolean"]
+        },
+        "secret": {
+          "description": "True if the value is a secret: it has no default and is set from a GitHub Actions secret.",
+          "type": "boolean",
+          "default": false
+        }
       },
-      "$comment": "Secrets have no default.",
       "if": { "properties": { "secret": { "const": true } }, "required": ["secret"] },
-      "then": { "not": { "required": ["default"] } }
+      "then": { "not": { "required": ["default"] } },
+      "else": { "required": ["default"] }
     },
     "call": {
       "type": "object",
-      "required": ["service", "url_env", "endpoints", "timeout_s", "on_failure"],
       "additionalProperties": false,
+      "required": ["service", "url_env", "endpoints", "timeout_s", "on_failure"],
       "properties": {
-        "service": { "type": "string" },
-        "url_env": { "type": "string" },
+        "service": { "description": "Name of the called service.", "type": "string" },
+        "url_env": {
+          "description": "Environment variable holding the called service's base URL.",
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
         "endpoints": {
+          "description": "Endpoints called, as 'METHOD /path', matching the called service's OpenAPI document.",
           "type": "array",
           "minItems": 1,
           "items": { "type": "string", "pattern": "^(GET|POST|PUT|PATCH|DELETE) /" }
         },
-        "timeout_s": { "type": "number", "exclusiveMinimum": 0 },
-        "on_failure": { "type": "string" }
+        "timeout_s": { "type": "number", "exclusiveMinimum": 0, "maximum": 30 },
+        "on_failure": {
+          "description": "What the user gets when the call fails or times out (§3).",
+          "type": "string"
+        }
       }
     }
   }
