@@ -57,6 +57,15 @@ def test_snooze_hides_a_due_reminder_for_one_hour(db) -> None:
     assert (later["status"], later["snoozed_until"]) == ("due", None)
 
 
+def test_every_snooze_is_counted(db) -> None:
+    schedule(db, OWNER, 10, NOW - timedelta(minutes=5), NOW)
+    assert list_for(db, OWNER, NOW)[0]["snoozed_count"] == 0
+    assert snooze(db, OWNER, 10, NOW)["snoozed_count"] == 1
+    assert snooze(db, OWNER, 10, NOW + timedelta(hours=2))["snoozed_count"] == 2
+    # Becoming due again does not reset it.
+    assert list_for(db, OWNER, NOW + timedelta(hours=4))[0]["snoozed_count"] == 2
+
+
 def test_a_scheduled_reminder_becomes_due_when_listed_after_its_time(db) -> None:
     schedule(db, OWNER, 10, START, NOW)
     assert list_for(db, OWNER, NOW)[0]["status"] == "scheduled"

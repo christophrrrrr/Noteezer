@@ -1071,6 +1071,10 @@ components:
           type: string
           title: Timezone
           default: ''
+        examples:
+          type: boolean
+          title: Examples
+          default: true
       type: object
       required:
       - email

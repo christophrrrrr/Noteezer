@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 from app.db import Connection, Row
 
 SNOOZE_FOR = timedelta(hours=1)
-COLUMNS = "item_id, user_id, remind_at, status, snoozed_until, repeat_daily, repeat_until"
+COLUMNS = "item_id, user_id, remind_at, status, snoozed_until, repeat_daily, repeat_until, snoozed_count"
 
 
 class ReminderExists(Exception):
@@ -134,7 +134,14 @@ def snooze(connection: Connection, user_id: int, item_id: int, now: datetime) ->
     row = _owned_row(connection, user_id, item_id)
     if row["status"] == "done":
         raise ValueError("a finished reminder cannot be snoozed")
-    return _set_status(connection, user_id, item_id, "snoozed", _iso(now + SNOOZE_FOR), row["remind_at"])
+    # Each snooze is counted (migration 002), so the UI can show "snoozed 2x".
+    connection.execute(
+        "UPDATE reminders SET status = 'snoozed', snoozed_until = ?, snoozed_count = snoozed_count + 1 "
+        "WHERE item_id = ? AND user_id = ?",
+        (_iso(now + SNOOZE_FOR), item_id, user_id),
+    )
+    connection.commit()
+    return _owned(connection, user_id, item_id)
 
 
 def _owned(connection: Connection, user_id: int, item_id: int) -> dict:
@@ -175,6 +182,7 @@ def _as_dict(row: Row) -> dict:
         "snoozed_until": row["snoozed_until"],
         "repeat_daily": bool(row["repeat_daily"]),
         "repeat_until": row["repeat_until"],
+        "snoozed_count": int(row["snoozed_count"]),
     }
 
 

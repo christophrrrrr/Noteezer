@@ -337,3 +337,15 @@ def test_the_ui_address_may_call_the_api_from_the_browser(monkeypatch) -> None:
             "/api/items/1", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "PUT"}
         )
         assert "access-control-allow-origin" not in other.headers
+
+
+def test_a_new_account_starts_with_the_examples_unless_it_asks_not_to(client) -> None:
+    answer = client.post("/api/register", json={"email": "new@example.com", "password": "password1"})
+    headers = {"Authorization": f"Bearer {answer.json()['token']}"}
+    folders = client.get("/api/folders", headers=headers).json()
+    assert [folder["name"] for folder in folders["folders"]] == ["Examples"]
+    assert client.get("/api/folders", headers=headers).json()["total_count"] == 3
+
+    answer = client.post("/api/register", json={"email": "old@example.com", "password": "password1", "examples": False})
+    headers = {"Authorization": f"Bearer {answer.json()['token']}"}
+    assert client.get("/api/folders", headers=headers).json()["total_count"] == 0

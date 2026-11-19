@@ -530,7 +530,11 @@
     }
     item.tags.forEach(function (tag) { append(meta, h("span", { class: "chip tag" }, "#" + tag)); });
     if (item.status) {
-      append(meta, h("span", { class: "chip" + (item.status === "due" ? " due" : "") }, icon("clock", 12), item.status + " " + item.remind_label));
+      // How often it was snoozed (reminders migration 002): "(2x)" while snoozed, else "\u00b7 snoozed 2x".
+      var snoozes = !(item.snoozed_count > 0) ? ""
+        : item.status === "snoozed" ? " (" + item.snoozed_count + "\u00d7)"
+          : " \u00b7 snoozed " + item.snoozed_count + "\u00d7";
+      append(meta, h("span", { class: "chip" + (item.status === "due" ? " due" : "") }, icon("clock", 12), item.status + " " + item.remind_label + snoozes));
     } else if (item.kind === "reminder") {
       var why = item.reminder_unavailable ? ", reminders is unavailable"
         : waiting ? ", reading it from the text…" : ", pick one under ⋯ Edit";

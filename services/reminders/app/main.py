@@ -28,6 +28,7 @@ class Reminder(BaseModel):
     snoozed_until: str | None = Field(description="ISO 8601 time in UTC while snoozed.")
     repeat_daily: bool
     repeat_until: str | None = Field(description="Last day of a daily reminder, YYYY-MM-DD.")
+    snoozed_count: int = Field(description="How often it was snoozed (since migration 002).")
 
 
 class Problem(BaseModel):

@@ -177,6 +177,22 @@ Coverage is measured on each service's whole `app` (settings in its `pyproject.t
 
 CI never touches Azure SQL.
 
+## Data on Azure
+
+The notes from Assignment 1 were moved from `data/noteezer.db` into the deployed system once, through the services' APIs (ADR-7):
+
+```
+NOTEEZER_PASSWORD=<new password> python scripts/import_a1.py --inbox https://<inbox address> --reminders https://<reminders address>
+```
+
+It recreates the account, folders, lines, ticks, and reminders, and refuses to run into an account that already has lines. The password comes from the environment, never the command line. It needs `httpx` (in `services/inbox/requirements.txt`).
+
+A new account starts with an Examples folder holding three lines that show how a line gets its kind. Seeding adds nothing to an account that already has that folder, so running it again never doubles the lines; `POST /api/register` with `"examples": false` skips it.
+
+### Migration 002
+
+`services/reminders/migrations/002_snoozed_count.sql` adds `snoozed_count` to `reminders`, a table that already held data on Azure. Existing rows keep every value; the column starts at 0, and a reminder that was snoozed at that moment is backfilled to 1. The evidence is in [docs/evidence](docs/evidence): the rows before (`migration-002-before.txt`), the startup log line, and the rows after (`migration-002-after.txt`).
+
 ## Secret scanning incidents
 
 GitGuardian scans every pull request. No real credential has been pushed, but both alerts are recorded here, as the brief asks for any leak.
