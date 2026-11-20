@@ -42,7 +42,7 @@ def save_item(
         connection.execute("INSERT INTO item_folders (item_id, folder_id) VALUES (?, ?)", (item_id, folder_id))
     _attach_tags(connection, user_id, item_id, classified.tags)
     # The line is committed before reminders is called, so it is never lost
-    # when reminders is down; it then waits as "no time yet" (ADR-7).
+    # when reminders is down; it then waits as "no time yet" (ADR-6).
     connection.commit()
     if classified.kind == "reminder" and remind_at is not None:
         _give_time(connection, user_id, item_id, remind_at, repeat_daily, repeat_until)
