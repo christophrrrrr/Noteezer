@@ -131,9 +131,15 @@ def complete(connection: Connection, user_id: int, item_id: int, now: datetime) 
 
 
 def snooze(connection: Connection, user_id: int, item_id: int, now: datetime) -> dict:
+    # Only a due reminder can be put off. One that is not due yet, or is still
+    # snoozed, has nothing to put off; refresh first, so one whose time has just
+    # come counts as due even if nobody listed it since.
+    refresh(connection, user_id, now)
     row = _owned_row(connection, user_id, item_id)
     if row["status"] == "done":
         raise ValueError("a finished reminder cannot be snoozed")
+    if row["status"] != "due":
+        raise ValueError("only a due reminder can be snoozed")
     # Each snooze is counted (migration 002), so the UI can show "snoozed 2x".
     connection.execute(
         "UPDATE reminders SET status = 'snoozed', snoozed_until = ?, snoozed_count = snoozed_count + 1 "
