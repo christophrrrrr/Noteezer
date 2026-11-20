@@ -138,18 +138,23 @@ jobs:
         # A cold start can take a few minutes: a new revision starts, and a
         # paused database takes about a minute to resume. /health must answer
         # 200 with this commit as its version, so the old revision does not count.
+        # One deadline for both services: counting attempts let a broken service
+        # hold the run for about 27 minutes, since each curl may wait 30 s.
         run: |
+          deadline=$((SECONDS + 480))
           for service in inbox reminders; do
             url="$([ "$service" = inbox ] && echo "$INBOX_URL" || echo "$REMINDERS_URL")/health"
-            for attempt in $(seq 1 40); do
+            attempt=0
+            while [ "$SECONDS" -lt "$deadline" ]; do
+              attempt=$((attempt + 1))
               body="$(curl -sS --max-time 30 "$url" || true)"
-              echo "$service, attempt $attempt: $body"
+              echo "$service, attempt $attempt, ${SECONDS}s: $body"
               if echo "$body" | grep -q "\"status\":\"ok\"" && echo "$body" | grep -q "\"version\":\"$SHA\""; then
                 continue 2
               fi
               sleep 10
             done
-            echo "::error::$service never became healthy at $url"
+            echo "::error::$service was not healthy with $SHA within 8 minutes at $url"
             exit 1
           done
           echo "Live at $UI_URL"

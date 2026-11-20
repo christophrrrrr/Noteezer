@@ -193,6 +193,12 @@ A new account starts with an Examples folder holding three lines that show how a
 
 `services/reminders/migrations/002_snoozed_count.sql` adds `snoozed_count` to `reminders`, a table that already held data on Azure. Existing rows keep every value; the column starts at 0, and a reminder that was snoozed at that moment is backfilled to 1. The evidence is in [docs/evidence](docs/evidence): the rows before (`migration-002-before.txt`), the startup log line, and the rows after (`migration-002-after.txt`).
 
+## When reminders is down
+
+On 2026-11-20 reminders was locked out of its own database on Azure on purpose (`DENY CONNECT`). Inbox stayed healthy, lines still saved within about 4.5 s, and a reminder saved meanwhile showed "no time yet, reminders is unavailable" under a red banner (screenshot below). A deploy merged during the outage failed at its health check, because reminders' new revision could not start. After `GRANT CONNECT` the same run was re-run and passed. The test also found two bugs, both fixed: a refused login was retried for a minute as if the database were paused, and the health check could take 27 minutes to give up. Every step, log line and run link is in [docs/evidence/partial-failure.md](docs/evidence/partial-failure.md).
+
+<img src="docs/evidence/partial-failure-reminders-down.png" alt="The inbox page while reminders is down: a red banner says reminders are unavailable and lines still save, and the new reminder line says no time yet, reminders is unavailable" width="300">
+
 ## Secret scanning incidents
 
 GitGuardian scans every pull request. No real credential has been pushed, but both alerts are recorded here, as the brief asks for any leak.
@@ -208,7 +214,7 @@ Live at **https://crintzieu2024ui.z1.web.core.windows.net**. The UI is a Storage
 
 ### Deploying
 
-`.github/workflows/cd.yml` runs on every push to `main` and nothing else changes Azure. It runs CI first, pushes both images to GHCR tagged with the commit SHA, signs in as the managed identity `crintz-ieu2024-github` through OpenID Connect (no Azure password is stored), points each Container App at its new image with its secrets, builds the UI with `scripts/build_ui.py` (which writes `config.js` and the Content-Security-Policy with the services' addresses) and uploads it to the `$web` container, then fails the run unless both `/health` answer 200 with the new commit within about seven minutes. The guide expects the first deploy to fail because new GHCR packages are private. Here it passed on the first run (2026-11-18, both services migrated with `001_init.sql` on startup): the images are pushed with the workflow's `GITHUB_TOKEN` from a public repository, so GHCR links each package to the repository and makes it public too. Anyone can pull them without a password, which is what Container Apps needs.
+`.github/workflows/cd.yml` runs on every push to `main` and nothing else changes Azure. It runs CI first, pushes both images to GHCR tagged with the commit SHA, signs in as the managed identity `crintz-ieu2024-github` through OpenID Connect (no Azure password is stored), points each Container App at its new image with its secrets, builds the UI with `scripts/build_ui.py` (which writes `config.js` and the Content-Security-Policy with the services' addresses) and uploads it to the `$web` container, then fails the run unless both `/health` answer 200 with the new commit within eight minutes (one deadline for both, since 2026-11-20). The guide expects the first deploy to fail because new GHCR packages are private. Here it passed on the first run (2026-11-18, both services migrated with `001_init.sql` on startup): the images are pushed with the workflow's `GITHUB_TOKEN` from a public repository, so GHCR links each package to the repository and makes it public too. Anyone can pull them without a password, which is what Container Apps needs.
 
 GitHub holds these secrets (Settings > Secrets and variables > Actions): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `INBOX_DB_PASSWORD`, `REMINDERS_DB_PASSWORD`, `SESSION_SECRET`, and `GEMINI_API_KEY`, and these variables: `PREFIX=crintz-ieu2024`, `RESOURCE_GROUP=rg-crintz-ieu2024`, `UI_STORAGE=crintzieu2024ui`. The workflow passes the passwords to Container Apps as secrets, never as plain variables.
 

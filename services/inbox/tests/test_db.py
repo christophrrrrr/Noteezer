@@ -150,12 +150,22 @@ def test_connecting_waits_while_a_paused_database_resumes(monkeypatch, code: str
     assert waits == [2.0, 4.0]
 
 
-def test_a_wrong_password_is_not_retried(monkeypatch) -> None:
+# Azure's answer on 2026-11-20 when the reminders user was denied CONNECT: the
+# number is 18456, but the text also names DB-Lib's 20002, which used to make
+# every request retry for about a minute.
+AZURE_REFUSED = (
+    b"DB-Lib error message 20018, severity 14:\nGeneral SQL Server error: Check messages from the SQL Server\n"
+    b"DB-Lib error message 20002, severity 9:\nAdaptive Server connection failed (worker.database.windows.net,11009)\n"
+)
+
+
+@pytest.mark.parametrize("message", ["Login failed for user 'inbox'.", AZURE_REFUSED], ids=["plain", "azure"])
+def test_a_refused_login_is_not_retried(monkeypatch, message) -> None:
     calls = []
 
     def fake_connect(**kwargs):
         calls.append(kwargs)
-        raise pymssql.OperationalError(18456, "Login failed for user 'inbox'.")
+        raise pymssql.OperationalError(18456, message)
 
     monkeypatch.setattr(db.pymssql, "connect", fake_connect)
     monkeypatch.setattr(db.time, "sleep", lambda seconds: None)
