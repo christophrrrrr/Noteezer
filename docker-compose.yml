@@ -97,7 +97,7 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
-      # Inbox keeps working while reminders is down (ADR-7), so it only waits
+      # Inbox keeps working while reminders is down (ADR-6), so it only waits
       # for reminders to start, not to be healthy.
       reminders:
         condition: service_started
