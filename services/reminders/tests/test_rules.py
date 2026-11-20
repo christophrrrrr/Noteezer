@@ -57,6 +57,17 @@ def test_snooze_hides_a_due_reminder_for_one_hour(db) -> None:
     assert (later["status"], later["snoozed_until"]) == ("due", None)
 
 
+def test_only_a_due_reminder_can_be_snoozed(db) -> None:
+    schedule(db, OWNER, 10, START, NOW)
+    with pytest.raises(ValueError, match="only a due reminder"):
+        snooze(db, OWNER, 10, NOW)
+    # Its time has come but nobody listed it yet: it still counts as due.
+    assert snooze(db, OWNER, 10, START)["status"] == "snoozed"
+    with pytest.raises(ValueError, match="only a due reminder"):
+        snooze(db, OWNER, 10, START + timedelta(minutes=30))
+    assert snooze(db, OWNER, 10, START + timedelta(hours=1))["snoozed_count"] == 2
+
+
 def test_every_snooze_is_counted(db) -> None:
     schedule(db, OWNER, 10, NOW - timedelta(minutes=5), NOW)
     assert list_for(db, OWNER, NOW)[0]["snoozed_count"] == 0

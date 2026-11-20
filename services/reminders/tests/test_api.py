@@ -52,6 +52,9 @@ def test_the_ui_lists_snoozes_and_finishes_with_the_persons_own_token(client) ->
 def test_errors_have_their_own_codes(client) -> None:
     assert client.post("/reminders/77/done", headers=_as(1)).status_code == 404
     assert client.post("/reminders/77/snooze", headers=_as(1)).status_code == 404
+    client.put("/reminders/11", json={"remind_at": START}, headers=_as(1, "inbox"))
+    early = client.post("/reminders/11/snooze", headers=_as(1))
+    assert (early.status_code, early.json()["detail"]) == (409, "only a due reminder can be snoozed")
     bad = client.put(
         "/reminders/10", json={"remind_at": START, "repeat_until": "2026-10-01"}, headers=_as(1, "inbox")
     )

@@ -605,7 +605,8 @@
       var row = h("div", { class: "row" }, button("Done", "button", function () {
         act(reminders("/reminders/" + id + "/done", { method: "POST" }));
       }));
-      if (item.status && item.status !== "done") {
+      // Only a due reminder can be snoozed; reminders refuses the rest with 409.
+      if (item.status === "due") {
         append(row, button("Snooze 1 hour", "button", function () {
           act(reminders("/reminders/" + id + "/snooze", { method: "POST" }));
         }));
