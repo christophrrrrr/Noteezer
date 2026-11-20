@@ -29,6 +29,10 @@ DatabaseError = pymssql.DatabaseError
 # connection or the login timed out). So connecting is retried with a growing
 # wait, about a minute in all. /health tries once: the deploy retries it.
 RETRY_ERRORS = ("40613", "20002", "20003")
+# A login the server refused (18456: wrong password, or CONNECT denied) is an
+# answer, not a pause, so it is never retried. pymssql still appends DB-Lib's
+# "20002 connection failed" to its text, so the error number is checked first.
+REFUSED_ERRORS = (18456,)
 CONNECT_ATTEMPTS = 6
 FIRST_WAIT_SECONDS = 2.0
 
@@ -60,6 +64,12 @@ def settings(database: str | None = None) -> dict[str, object]:
     }
 
 
+def _worth_retrying(error: Exception) -> bool:
+    if error.args and error.args[0] in REFUSED_ERRORS:
+        return False
+    return any(code in str(error) for code in RETRY_ERRORS)
+
+
 def connect(
     database: str | None = None,
     autocommit: bool = False,
@@ -71,7 +81,7 @@ def connect(
             raw = pymssql.connect(**settings(database), login_timeout=10, autocommit=autocommit)
             return Connection(raw)
         except pymssql.OperationalError as error:
-            if attempt == attempts or not any(code in str(error) for code in RETRY_ERRORS):
+            if attempt == attempts or not _worth_retrying(error):
                 raise
             log.warning("Database not available yet (attempt %s of %s), retrying in %.0f s", attempt, attempts, wait)
             time.sleep(wait)
