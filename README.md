@@ -102,7 +102,7 @@ DATABASE_URL=mssql://sa:<your password>@localhost:1433/noteezer_reminders
 SESSION_SECRET=<the same long random value>
 ```
 
-Add `CORS_ORIGINS=http://localhost:8080` to both files so the UI may call them. Then start each service in its own terminal, and serve the UI from a third (its `config.js` already points at ports 8000 and 8001):
+Add `CORS_ORIGINS=http://localhost:8080` to both files so the UI may call them. The commands below are for Windows; on macOS or Linux use `python3 -m venv .venv`, `source .venv/bin/activate`, and `/` in the paths. Start each service in its own terminal, and serve the UI from a third (its `config.js` already points at ports 8000 and 8001):
 
 ```
 cd services\reminders
