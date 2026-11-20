@@ -6,7 +6,7 @@ Every route but register, login, and health needs `Authorization: Bearer
 for an item or folder that does not exist or belongs to someone else.
 
 Reminder done and snooze are not here: the UI calls the reminders service
-for those itself (ADR-7). Inbox only toggles tasks.
+for those itself (ADR-6). Inbox only toggles tasks.
 """
 
 from datetime import date, datetime, timezone, tzinfo

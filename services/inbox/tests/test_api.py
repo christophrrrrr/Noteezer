@@ -251,7 +251,7 @@ def test_a_suggested_time_waits_while_reminders_is_down(client: TestClient, monk
 
 
 def test_the_ui_finishes_reminders_in_the_reminders_service_with_the_same_token(client: TestClient) -> None:
-    # The UI calls reminders itself for done and snooze (ADR-7), with the token
+    # The UI calls reminders itself for done and snooze (ADR-6), with the token
     # inbox gave it at login.
     token = sign_in(client)
     item = client.post("/api/items", data={"body": "remind stretch", "remind_at": "2020-01-01T09:00"}).json()["id"]

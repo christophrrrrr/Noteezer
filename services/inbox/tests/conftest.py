@@ -9,7 +9,7 @@ before every test, so ids start at 1 each time.
 
 The real reminders service runs next to the tests: the session starts it with
 `python -m app` from services/reminders, on a free port and with its own test
-database, so every reminder an inbox test saves goes over real HTTP (ADR-7).
+database, so every reminder an inbox test saves goes over real HTTP (ADR-6, ADR-9).
 """
 
 import os

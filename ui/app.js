@@ -1,6 +1,6 @@
 // Noteezer's static UI (ADR-6). It talks to two services:
 //   inbox     — accounts, lines, folders, sorting, images (everything but times)
-//   reminders — done and snooze on a reminder (ADR-7)
+//   reminders — done and snooze on a reminder (ADR-6)
 // Their addresses come from config.js, which is written at deploy time.
 //
 // Safety: text from notes, folders, and link previews is only ever put on the
@@ -601,7 +601,7 @@
     var panel = h("div", { class: "menu-panel" });
 
     if (item.kind === "reminder") {
-      // Done and snooze go straight to the reminders service (ADR-7).
+      // Done and snooze go straight to the reminders service (ADR-6).
       var row = h("div", { class: "row" }, button("Done", "button", function () {
         act(reminders("/reminders/" + id + "/done", { method: "POST" }));
       }));
