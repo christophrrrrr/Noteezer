@@ -47,7 +47,7 @@ Without Gemini, times come only from the picker. With Gemini, a line that starts
 
 Noteezer is deployed on Azure at **https://crintzieu2024ui.z1.web.core.windows.net**, so it no longer needs the laptop (ADR-8). Every push to `main` deploys it; the one-time setup is under [Azure](#azure).
 
-Push notifications to the phone are not built (ADR-5). The in-process background task could send them, but a reminder would only arrive while the computer running Noteezer is on, so they also wait for the always-on deployment. Until then, due reminders are pinned at the top when the app is opened. Also out of scope: chat import, offline mode, sharing items with other people, and video files (a video link is understood from its title).
+Push notifications to the phone are still not built (ADR-5, ADR-10). The deployment scales to zero, so nothing is awake at a reminder's time to send one, and keeping something awake would use up the free Azure allowances within days. Due reminders are pinned at the top when the app is opened. Also out of scope: chat import, offline mode, sharing items with other people, and video files (a video link is understood from its title).
 
 ## Run
 
