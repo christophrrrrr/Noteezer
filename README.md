@@ -55,13 +55,15 @@ Noteezer is a static UI and two services (ADR-6). **inbox** (`services/inbox`, p
 
 ### Everything at once, with Docker
 
-Docker Desktop has to be running. Copy `.env.example` to `.env` (git ignores it) and fill in `SA_PASSWORD`, `INBOX_DB_PASSWORD`, and `REMINDERS_DB_PASSWORD` (8+ characters with upper case, lower case, and digits; SQL Server refuses weaker ones, and `python -c "import secrets; print(secrets.token_hex(16) + 'Ab1')"` makes one) and `SESSION_SECRET` (`python -c "import secrets; print(secrets.token_hex(32))"` makes one). Then:
+Docker Desktop has to be running. From a clean clone, with no other step:
 
 ```
 docker compose up --build
 ```
 
-Open `http://localhost:8080`. Compose starts SQL Server, waits until it answers, runs `db/init.sql` to create the two databases and one login per service (`inbox` can open only `noteezer_inbox`, `reminders` only `noteezer_reminders`), starts reminders and inbox, each logged in as its own user and applying its own migrations (ADR-7), and serves `ui/` with nginx. nginx writes `config.js` from `INBOX_URL` and `REMINDERS_URL` and sends a Content-Security-Policy that only lets the page call those two addresses. Only ports 8080, 8000, and 8001 are published, all on `127.0.0.1`; the database is reachable only from the other containers. `docker compose down` stops everything and keeps the data; `docker compose down -v` deletes it too.
+The passwords are made on the first start. A one-off `secrets` container makes random ones for SQL Server's administrator, the two service logins, and `SESSION_SECRET`, and keeps them in the `secrets` volume. Each container then loads only its own into its environment through `docker/secrets/with-secrets.sh` before its normal command. To choose them yourself, copy `.env.example` to `.env` (git ignores it) and fill in any of them; a value in `.env` always wins. SQL Server keeps the administrator password from its first start, so changing `SA_PASSWORD` later needs `docker compose down -v`, which also deletes the data. `GEMINI_API_KEY` in `.env` turns on Gemini sorting.
+
+Open `http://localhost:8080`. Compose makes or loads the local passwords, starts SQL Server, waits until it answers, runs `db/init.sql` to create the two databases and one login per service (`inbox` can open only `noteezer_inbox`, `reminders` only `noteezer_reminders`), starts reminders and inbox, each logged in as its own user and applying its own migrations (ADR-7), and serves `ui/` with nginx. nginx writes `config.js` from `INBOX_URL` and `REMINDERS_URL` and sends a Content-Security-Policy that only lets the page call those two addresses. Only ports 8080, 8000, and 8001 are published, all on `127.0.0.1`; the database is reachable only from the other containers. `docker compose down` stops everything and keeps the data and the passwords; `docker compose down -v` deletes both.
 
 If an antivirus or a company proxy re-signs HTTPS on your computer (Norton does), `pip install` inside the image build fails with `CERTIFICATE_VERIFY_FAILED`. Export that root certificate as a PEM file outside the repo and add a git-ignored `docker-compose.override.yml`:
 

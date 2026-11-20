@@ -7,7 +7,7 @@
 # Nothing here holds a password. The one-off "secrets" service makes random
 # local ones on the first start and keeps them in the "secrets" volume; a
 # git-ignored .env (see .env.example) can set them instead. Each container
-# loads only its own through docker/secrets/with-secrets.sh.
+# loads only its own into its environment through docker/secrets/with-secrets.sh.
 name: noteezer
 
 services:

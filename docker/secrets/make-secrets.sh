@@ -2,11 +2,14 @@
 # Run once by the one-off "secrets" service in docker-compose.yml, before
 # anything else starts. It makes the four local secrets, so a clean clone runs
 # with just `docker compose up --build`, and writes one small env file per
-# container, so each container sees only the secrets it needs.
+# container, so each container's environment holds only the secrets it needs.
+# (The volume itself is shared by the containers; it never leaves this computer.)
 #
 # A value set in .env always wins (and replaces a saved one). Otherwise a value
 # saved by an earlier run is kept, because the database volume was created with
 # it. Otherwise a new random one is made. Nothing is printed.
+# SQL Server keeps the administrator password it started with the first time,
+# so changing SA_PASSWORD later needs `docker compose down -v` (which deletes the data).
 set -eu
 cd /secrets
 
