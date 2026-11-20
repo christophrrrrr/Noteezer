@@ -1,31 +1,52 @@
 # The whole system on one computer: SQL Server, a one-off job that creates the
 # two databases, the two services, and nginx serving the static UI.
 #
-#   copy .env.example .env      (then fill in the secrets)
 #   docker compose up --build
 #   open http://localhost:8080
 #
-# Secrets come from .env next to this file, which git ignores. Nothing here
-# holds a password.
+# Nothing here holds a password. The one-off "secrets" service makes random
+# local ones on the first start and keeps them in the "secrets" volume; a
+# git-ignored .env (see .env.example) can set them instead. Each container
+# loads only its own through docker/secrets/with-secrets.sh.
 name: noteezer
 
 services:
+  secrets:
+    # Reuses the SQL Server image, which is pulled anyway, for its shell. Root
+    # only here, to write into the new volume; it exits when done.
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    user: root
+    environment:
+      SA_PASSWORD: ${SA_PASSWORD:-}
+      INBOX_DB_PASSWORD: ${INBOX_DB_PASSWORD:-}
+      REMINDERS_DB_PASSWORD: ${REMINDERS_DB_PASSWORD:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+    volumes:
+      - secrets:/secrets
+      - ./docker/secrets/make-secrets.sh:/local/make-secrets.sh:ro
+    entrypoint: ["/bin/sh", "/local/make-secrets.sh"]
+    restart: "no"
+
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      secrets:
+        condition: service_completed_successfully
     environment:
       ACCEPT_EULA: "Y"
-      # The administrator, used only by the healthcheck and db-init. The
-      # services log in as their own users. Plain ${...} on purpose: a
-      # "${VAR:?message}" check reads to secret scanners like a password
-      # written in the file. Without a value, SQL Server refuses to start.
-      MSSQL_SA_PASSWORD: ${SA_PASSWORD}
-      # sqlcmd reads the password from here, so it never shows in a command line.
-      SQLCMDPASSWORD: ${SA_PASSWORD}
+    # with-secrets.sh sets MSSQL_SA_PASSWORD, the administrator used only by
+    # the healthcheck and db-init (the services log in as their own users), and
+    # SQLCMDPASSWORD, so the password never shows in a command line. Then it
+    # runs the image's own entrypoint and command.
+    entrypoint: ["/bin/sh", "/local/with-secrets.sh", "sqlserver"]
+    command: ["/opt/mssql/bin/launch_sqlservr.sh", "/opt/mssql/bin/sqlservr"]
     volumes:
       - sqldata:/var/opt/mssql
+      - secrets:/secrets:ro
+      - ./docker/secrets/with-secrets.sh:/local/with-secrets.sh:ro
     # No port is published: only the containers below can reach the database.
     healthcheck:
-      test: ["CMD", "/opt/mssql-tools18/bin/sqlcmd", "-C", "-S", "localhost", "-U", "sa", "-b", "-Q", "SELECT 1"]
+      test: ["CMD", "/bin/sh", "/local/with-secrets.sh", "sqlserver", "/opt/mssql-tools18/bin/sqlcmd", "-C", "-S", "localhost", "-U", "sa", "-b", "-Q", "SELECT 1"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -38,13 +59,14 @@ services:
     depends_on:
       sqlserver:
         condition: service_healthy
-    environment:
-      SQLCMDPASSWORD: ${SA_PASSWORD}
-      INBOX_DB_PASSWORD: ${INBOX_DB_PASSWORD}
-      REMINDERS_DB_PASSWORD: ${REMINDERS_DB_PASSWORD}
+    # with-secrets.sh sets SQLCMDPASSWORD and the two service passwords, which
+    # sqlcmd fills into db/init.sql.
     volumes:
       - ./db/init.sql:/db/init.sql:ro
-    entrypoint: ["/opt/mssql-tools18/bin/sqlcmd", "-C", "-S", "sqlserver", "-U", "sa", "-b", "-i", "/db/init.sql"]
+      - secrets:/secrets:ro
+      - ./docker/secrets/with-secrets.sh:/local/with-secrets.sh:ro
+    entrypoint: ["/bin/sh", "/local/with-secrets.sh", "db-init"]
+    command: ["/opt/mssql-tools18/bin/sqlcmd", "-C", "-S", "sqlserver", "-U", "sa", "-b", "-i", "/db/init.sql"]
     restart: "no"
 
   reminders:
@@ -55,10 +77,14 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
+    # with-secrets.sh sets DATABASE_URL, with its own login that can reach only
+    # noteezer_reminders, and SESSION_SECRET, shared with inbox to check tokens.
+    entrypoint: ["/bin/sh", "/local/with-secrets.sh", "reminders"]
+    command: ["python", "-m", "app"]
+    volumes:
+      - secrets:/secrets:ro
+      - ./docker/secrets/with-secrets.sh:/local/with-secrets.sh:ro
     environment:
-      # Its own login, which can reach only noteezer_reminders.
-      DATABASE_URL: mssql://reminders:${REMINDERS_DB_PASSWORD}@sqlserver:1433/noteezer_reminders
-      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
       CORS_ORIGINS: http://localhost:8080
     ports:
       - "127.0.0.1:8001:8001"
@@ -75,9 +101,13 @@ services:
       # for reminders to start, not to be healthy.
       reminders:
         condition: service_started
+    # with-secrets.sh sets DATABASE_URL (login inbox) and SESSION_SECRET.
+    entrypoint: ["/bin/sh", "/local/with-secrets.sh", "inbox"]
+    command: ["python", "-m", "app"]
+    volumes:
+      - secrets:/secrets:ro
+      - ./docker/secrets/with-secrets.sh:/local/with-secrets.sh:ro
     environment:
-      DATABASE_URL: mssql://inbox:${INBOX_DB_PASSWORD}@sqlserver:1433/noteezer_inbox
-      SESSION_SECRET: ${SESSION_SECRET}
       REMINDERS_URL: http://reminders:8001
       CORS_ORIGINS: http://localhost:8080
       SORTER: ${SORTER:-auto}
@@ -101,3 +131,6 @@ services:
 
 volumes:
   sqldata:
+  # The local passwords, made by the secrets service. `docker compose down -v`
+  # deletes them together with the data.
+  secrets:
