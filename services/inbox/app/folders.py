@@ -78,11 +78,12 @@ def delete_folder(connection: Connection, user_id: int, folder_id: int) -> None:
         raise LookupError("folder not found")
     placeholders = ",".join("?" for _ in subtree)
     ids = tuple(subtree)
+    # Only "?" placeholders are put into the SQL; the ids are passed as parameters.
     connection.execute(
-        f"UPDATE sort_results SET proposed_parent_id = NULL WHERE proposed_parent_id IN ({placeholders})",
+        f"UPDATE sort_results SET proposed_parent_id = NULL WHERE proposed_parent_id IN ({placeholders})",  # noqa: S608
         ids,
     )
-    connection.execute(f"DELETE FROM folders WHERE id IN ({placeholders})", ids)
+    connection.execute(f"DELETE FROM folders WHERE id IN ({placeholders})", ids)  # noqa: S608
     connection.commit()
 
 

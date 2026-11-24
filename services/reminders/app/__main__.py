@@ -13,4 +13,6 @@ if __name__ == "__main__":
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     configure_logging()
     port = int(os.environ.get("PORT", "8001"))
-    uvicorn.run(create_app(), host="0.0.0.0", port=port)
+    # All interfaces on purpose: in a container the platform's proxy reaches the
+    # app from outside it. Compose publishes the port on 127.0.0.1 only.
+    uvicorn.run(create_app(), host="0.0.0.0", port=port)  # noqa: S104

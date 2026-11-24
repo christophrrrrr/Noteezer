@@ -391,9 +391,10 @@ def list_items(
     tags_by_item: dict[int, list[str]] = {int(row["id"]): [] for row in rows}
     folders_by_item: dict[int, list[int]] = {int(row["id"]): [] for row in rows}
     if tags_by_item:
+        # Only "?" placeholders are put into the SQL; the ids are passed as parameters.
         placeholders = ",".join("?" for _ in tags_by_item)
         for membership in connection.execute(
-            f"SELECT item_id, folder_id FROM item_folders WHERE item_id IN ({placeholders}) ORDER BY folder_id",
+            f"SELECT item_id, folder_id FROM item_folders WHERE item_id IN ({placeholders}) ORDER BY folder_id",  # noqa: S608
             tuple(folders_by_item),
         ):
             folders_by_item[int(membership["item_id"])].append(int(membership["folder_id"]))
@@ -404,7 +405,7 @@ def list_items(
             JOIN tags t ON t.id = it.tag_id
             WHERE it.item_id IN ({placeholders})
             ORDER BY t.name
-            """,
+            """,  # noqa: S608
             tuple(tags_by_item),
         ).fetchall()
         for tag_row in tag_rows:

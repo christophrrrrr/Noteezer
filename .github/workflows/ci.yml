@@ -1,13 +1,21 @@
 # CI: every push and every pull request (brief §5). A red job blocks the merge.
 #
-#   lint       ruff over both services, with the rules in ruff.toml
+#   lint       ruff over both services, with the rules in ruff.toml, including
+#              its Bandit security rules (SAST)
 #   test       each service's tests against a real SQL Server container, with
 #              coverage of its whole app; below 70% fails. Also fails when
-#              openapi.yaml no longer matches the code.
+#              openapi.yaml no longer matches the code, or when pip-audit finds
+#              a known vulnerability in the service's dependencies (SCA).
 #   contracts  system.yaml against system.schema.json, both OpenAPI files
 #              against the OpenAPI specification, and system.yaml against
 #              the code (scripts/check_system.py)
-#   build      both Docker images, exactly as they will ship; not pushed yet
+#   build      both Docker images, exactly as they will ship; not pushed yet.
+#              Trivy scans each one and fails on a HIGH or CRITICAL
+#              vulnerability that has a fix.
+#
+# CodeQL runs in its own workflow (codeql.yml). Every action is pinned to a
+# full commit SHA, with the version in a comment: a tag can be moved to other
+# code, as happened to trivy-action's tags in March 2026 (ADR-9).
 #
 # CI never touches Azure SQL. On main, cd.yml calls this workflow first
 # (workflow_call), so a deploy only happens after these jobs pass, and its own
@@ -27,8 +35,8 @@ jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
       - run: pip install ruff==0.17.4
@@ -44,8 +52,8 @@ jobs:
       run:
         working-directory: services/${{ matrix.service }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
           cache: pip
@@ -72,6 +80,13 @@ jobs:
 
       - run: pip install -r requirements-dev.txt
 
+      - name: Known vulnerabilities in the dependencies (pip-audit)
+        # Resolves requirements-dev.txt, which includes requirements.txt, and
+        # checks every package against the PyPI and OSV advisories.
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements-dev.txt
+
       - name: Tests and coverage
         # Settings in pyproject.toml; the threshold is repeated here so the
         # gate is visible in the workflow. Inbox's tests also start the real
@@ -84,8 +99,8 @@ jobs:
   contracts:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
       - run: pip install check-jsonschema==0.39.0 openapi-spec-validator==0.9.0 PyYAML==6.0.3
@@ -107,10 +122,10 @@ jobs:
       matrix:
         service: [inbox, reminders]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Build the ${{ matrix.service }} image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: services/${{ matrix.service }}
           push: false
@@ -118,5 +133,29 @@ jobs:
           provenance: false
           build-args: GIT_SHA=${{ github.sha }}
           tags: noteezer-${{ matrix.service }}:${{ github.sha }}
+          # Into the runner's Docker, so Trivy can scan it.
+          load: true
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Install Trivy
+        # One fixed release, checked against its SHA-256, instead of
+        # trivy-action, whose tags were replaced with malware in March 2026.
+        run: |
+          version=0.76.2
+          sha256=bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+          file="trivy_${version}_Linux-64bit.tar.gz"
+          curl -sSfLO "https://github.com/aquasecurity/trivy/releases/download/v${version}/${file}"
+          echo "${sha256}  ${file}" | sha256sum -c -
+          tar -xzf "$file" trivy
+          sudo mv trivy /usr/local/bin/trivy
+
+      - name: Scan the ${{ matrix.service }} image (Trivy)
+        # OS packages of the base image and the Python packages in it. Only a
+        # HIGH or CRITICAL vulnerability with a released fix fails the job: one
+        # without a fix cannot be acted on yet, and is still printed.
+        run: |
+          image=noteezer-${{ matrix.service }}:${{ github.sha }}
+          trivy image --scanners vuln --no-progress --severity HIGH,CRITICAL "$image"
+          trivy image --scanners vuln --no-progress --quiet --skip-db-update \
+            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$image"

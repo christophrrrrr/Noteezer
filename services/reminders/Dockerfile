@@ -1,7 +1,9 @@
 # The reminders service. Only the code and the migrations go into the image;
 # the tests, .env, and the virtualenv stay out (see .dockerignore).
 # Pinned to one exact build of the image; the tag is kept for people reading it.
-FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+# Moved to a newer build when Trivy in CI finds a fixed vulnerability in it
+# (2026-11-24: zlib, Debian 13.8; still Python 3.13.18).
+FROM python:3.13-slim@sha256:1b5c0692836eae9b028cc352d7146872f36939aa1fb0de24d3ef6df307b956c9
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -12,12 +14,16 @@ COPY requirements.txt .
 # A network that re-signs HTTPS (an antivirus, a company proxy) can lend its
 # root certificate as the optional build secret "extra_ca". It is only used
 # for this pip install and never lands in the image. CI and Azure pass none.
+# pip itself is removed afterwards: it is not needed at runtime, it carries its
+# own copies of urllib3, msgpack, and setuptools code that the image scan
+# flags, and without it nothing in the running container can install packages.
 RUN --mount=type=secret,id=extra_ca,required=false \
     if [ -s /run/secrets/extra_ca ]; then \
         cat /etc/ssl/certs/ca-certificates.crt /run/secrets/extra_ca > /tmp/ca.pem; \
         export PIP_CERT=/tmp/ca.pem; \
     fi; \
-    pip install --no-cache-dir -r requirements.txt && rm -f /tmp/ca.pem
+    pip install --no-cache-dir -r requirements.txt && rm -f /tmp/ca.pem \
+    && pip uninstall --yes pip
 
 COPY app ./app
 COPY migrations ./migrations

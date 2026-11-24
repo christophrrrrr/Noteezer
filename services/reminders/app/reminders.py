@@ -110,7 +110,8 @@ def refresh(connection: Connection, user_id: int, now: datetime) -> None:
 def list_for(connection: Connection, user_id: int, now: datetime, item_ids: list[int] | None = None) -> list[dict]:
     """The user's reminders, after the ones whose time has come became due."""
     refresh(connection, user_id, now)
-    sql = f"SELECT {COLUMNS} FROM reminders WHERE user_id = ?"
+    # COLUMNS is a constant and only "?" placeholders are added; values are parameters.
+    sql = f"SELECT {COLUMNS} FROM reminders WHERE user_id = ?"  # noqa: S608
     parameters: list[object] = [user_id]
     if item_ids:
         sql += " AND item_id IN (" + ",".join("?" for _ in item_ids) + ")"
@@ -156,7 +157,7 @@ def _owned(connection: Connection, user_id: int, item_id: int) -> dict:
 
 def _owned_row(connection: Connection, user_id: int, item_id: int) -> Row:
     row = connection.execute(
-        f"SELECT {COLUMNS} FROM reminders WHERE item_id = ? AND user_id = ?",
+        f"SELECT {COLUMNS} FROM reminders WHERE item_id = ? AND user_id = ?",  # noqa: S608 (COLUMNS is a constant)
         (item_id, user_id),
     ).fetchone()
     if row is None:
