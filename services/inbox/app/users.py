@@ -9,8 +9,10 @@ from app.passwords import hash_password, verify_password
 # stops at the next "@" or dot, so a failed match cannot backtrack: the old
 # pattern, where both sides of the last dot could also hold dots, took 16 s on
 # a 64 KB address that does not match (CodeQL py/polynomial-redos, 2026-11-24).
-# Longer than users.email can hold is refused before the pattern runs.
-_EMAIL_PATTERN = re.compile(r"[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+")
+# Longer than users.email can hold is refused before the pattern runs. The "^"
+# changes nothing for fullmatch, but CodeQL reads a pattern without it as one
+# that is tried from every position.
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+")
 MAX_EMAIL_LENGTH = 320
 
 

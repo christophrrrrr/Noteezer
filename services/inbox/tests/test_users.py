@@ -63,4 +63,6 @@ def test_a_crafted_address_is_refused_quickly() -> None:
         normalize_email(crafted)
     with pytest.raises(AccountError):
         normalize_email(crafted[:300])
+    with pytest.raises(AccountError):
+        normalize_email("!" * 300)
     assert time.perf_counter() - started < 0.1
