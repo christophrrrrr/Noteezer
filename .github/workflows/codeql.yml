@@ -1,0 +1,49 @@
+# CodeQL: static analysis for security bugs (SAST), next to ruff's Bandit rules
+# in ci.yml. Ruff looks at one line at a time; CodeQL follows data from where
+# it enters (a request, a form, a fetched page) to where it is used (SQL, an
+# outgoing URL, the page's HTML), so it can find injection and request
+# forgery paths across functions. Free for public repositories.
+#
+#   python                 both services and scripts/
+#   javascript-typescript  the static UI in ui/ (for example HTML built from
+#                          note text, where only textContent is allowed)
+#   actions                the workflows themselves (for example untrusted
+#                          input from a pull request reaching a run: step)
+#
+# Findings appear under Security > Code scanning, and on the pull request.
+# Weekly as well, because new queries find old bugs in unchanged code.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # To upload the results to code scanning.
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          languages: ${{ matrix.language }}
+          # Nothing to compile: Python and JavaScript are read as source.
+          build-mode: none
+          # The default queries plus the extended security set.
+          queries: security-extended
+      - uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          category: /language:${{ matrix.language }}

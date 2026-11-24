@@ -3,9 +3,16 @@ line-length = 120
 target-version = "py313"
 
 [lint]
-# pycodestyle errors and warnings, pyflakes (unused or undefined names), and
-# sorted imports.
-select = ["E", "W", "F", "I"]
+# pycodestyle errors and warnings, pyflakes (unused or undefined names), sorted
+# imports, and S: the security checks of Bandit (SAST), built into ruff. A
+# finding that is not a real risk is silenced on its own line with
+# `# noqa: S...` and the reason, never for a whole file of app code.
+select = ["E", "W", "F", "I", "S"]
+
+[lint.per-file-ignores]
+# Tests use assert, a made-up session secret, and SQL built from fixed table
+# and column names. None of it ships in an image (.dockerignore).
+"services/*/tests/**" = ["S101", "S105", "S608"]
 
 [lint.isort]
 known-first-party = ["app", "tests"]
