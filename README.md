@@ -172,10 +172,12 @@ Coverage is measured on each service's whole `app` (settings in its `pyproject.t
 
 `.github/workflows/ci.yml` runs on every push and pull request, and a red job blocks the merge (ADR-9):
 
-- **lint**: ruff.
-- **test**, once per service: starts a throwaway SQL Server container in the job, runs the tests with coverage (below 70% fails), and checks that the committed `openapi.yaml` still matches the code.
+- **lint**: ruff, including its Bandit security rules (SAST). A finding that is not a real risk is silenced on its own line with the reason.
+- **test**, once per service: starts a throwaway SQL Server container in the job, runs the tests with coverage (below 70% fails), and checks that the committed `openapi.yaml` still matches the code. `pip-audit` first checks the service's dependencies against the published advisories (SCA) and fails on any known vulnerability.
 - **contracts**: validates `system.yaml` against `system.schema.json` and both `openapi.yaml` files against the OpenAPI specification, then runs `scripts/check_system.py`, which checks that every variable the code reads is listed in `system.yaml` and every endpoint inbox calls exists in reminders' `openapi.yaml`.
-- **build**: both Docker images, with the commit SHA as their version.
+- **build**: both Docker images, with the commit SHA as their version. Trivy scans each image and fails on a HIGH or CRITICAL vulnerability that already has a fix.
+
+`.github/workflows/codeql.yml` runs CodeQL on pull requests, on `main`, and weekly, for the Python services, the UI's JavaScript, and the workflows; its findings are under Security > Code scanning. Every action in the workflows is pinned to a full commit SHA. On GitHub, Dependabot alerts and security updates, and secret scanning with push protection, are turned on, next to GitGuardian.
 
 CI never touches Azure SQL.
 
