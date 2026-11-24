@@ -1,6 +1,6 @@
 # Tests, lint, and the OpenAPI export. Not installed in the image.
 -r requirements.txt
-pytest==8.3.4
-pytest-cov==6.0.0
+pytest==9.2.0
+pytest-cov==7.1.0
 ruff==0.17.4
 PyYAML==6.0.3
