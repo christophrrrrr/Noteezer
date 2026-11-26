@@ -125,7 +125,12 @@ def complete(connection: Connection, user_id: int, item_id: int, now: datetime) 
     if not row["repeat_daily"]:
         return _set_status(connection, user_id, item_id, "done", None, row["remind_at"])
     until = date.fromisoformat(row["repeat_until"]) if row["repeat_until"] else None
+    # Done counts for every day that has already passed: ticked three days
+    # late, it moves to the next time still ahead, not to a day that is
+    # already over and would be due again at once.
     upcoming = next_occurrence(_parse(row["remind_at"]), until)
+    while upcoming is not None and upcoming <= now:
+        upcoming = next_occurrence(upcoming, until)
     if upcoming is None:
         return _set_status(connection, user_id, item_id, "done", None, row["remind_at"])
     return _set_status(connection, user_id, item_id, initial_status(upcoming, now), None, _iso(upcoming))
