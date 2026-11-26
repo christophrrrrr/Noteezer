@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Protocol
 
 from app.classify import classify
-from app.db import Connection, Row
+from app.db import Connection, IntegrityError, Row
 from app.folders import FolderError, create_folder, find_folder, list_folders
 from app.images import Image, readable_image, record_reading
 from app.inbox import (
@@ -185,35 +185,56 @@ def sort_pending(
                 for entry in list_folders(connection, user_id)
             ]
             zones[user_id] = user_timezone(connection, user_id)
-        options = options_by_user[user_id]
         item_id = int(row["id"])
-        attempts = int(row["attempts"] or 0) + 1
-        note = Note(
-            body=row["body"],
-            tags=classify(row["body"]).tags,
-            links=_links(connection, item_id, row["body"], fetch_preview, now),
-            kind=row["kind"],
-            now=now.astimezone(zones[user_id]),
-            image=readable_image(connection, item_id),
-        )
         try:
-            suggestion = sorter.suggest(note, options)
-        except Exception as error:  # an engine can fail on network or quota; the item is retried later
-            log.warning("Sorting item %s with %s failed: %s", item_id, sorter.name, error)
-            _record_failure(connection, item_id, sorter.name, attempts, str(error), now)
-            continue
-        if note.image is not None:
-            # What the engine read is kept with the image. A screenshot is one
-            # thing, so it is never split into parts.
-            if suggestion.image_title or suggestion.image_text:
-                record_reading(connection, user_id, item_id, suggestion.image_title, suggestion.image_text, now)
-            suggestion = replace(suggestion, parts=())
-        try:
-            _apply(connection, user_id, row, suggestion, options, sorter.name, attempts, now)
-        except RemindersUnavailable as error:
-            # The time read from the text could not be stored; sort again later.
-            _record_failure(connection, item_id, sorter.name, attempts, f"reminders unavailable: {error}", now)
+            _sort_one(connection, sorter, row, options_by_user[user_id], zones[user_id], now, fetch_preview)
+        except IntegrityError:
+            # The person deleted the line while the engine was reading it, so
+            # its result has no line to belong to. Skip it, keep the others.
+            connection.rollback()
+            if connection.execute("SELECT 1 FROM items WHERE id = ?", (item_id,)).fetchone() is not None:
+                raise
+            log.info("Item %s was deleted while it was being sorted", item_id)
     return len(rows)
+
+
+def _sort_one(
+    connection: Connection,
+    sorter: Sorter,
+    row: Row,
+    options: list[FolderOption],
+    zone: tzinfo,
+    now: datetime,
+    fetch_preview: Callable[[str], LinkPreview | None] | None,
+) -> None:
+    user_id = int(row["user_id"])
+    item_id = int(row["id"])
+    attempts = int(row["attempts"] or 0) + 1
+    note = Note(
+        body=row["body"],
+        tags=classify(row["body"]).tags,
+        links=_links(connection, item_id, row["body"], fetch_preview, now),
+        kind=row["kind"],
+        now=now.astimezone(zone),
+        image=readable_image(connection, item_id),
+    )
+    try:
+        suggestion = sorter.suggest(note, options)
+    except Exception as error:  # an engine can fail on network or quota; the item is retried later
+        log.warning("Sorting item %s with %s failed: %s", item_id, sorter.name, error)
+        _record_failure(connection, item_id, sorter.name, attempts, str(error), now)
+        return
+    if note.image is not None:
+        # What the engine read is kept with the image. A screenshot is one
+        # thing, so it is never split into parts.
+        if suggestion.image_title or suggestion.image_text:
+            record_reading(connection, user_id, item_id, suggestion.image_title, suggestion.image_text, now)
+        suggestion = replace(suggestion, parts=())
+    try:
+        _apply(connection, user_id, row, suggestion, options, sorter.name, attempts, now)
+    except RemindersUnavailable as error:
+        # The time read from the text could not be stored; sort again later.
+        _record_failure(connection, item_id, sorter.name, attempts, f"reminders unavailable: {error}", now)
 
 
 def accept_suggestion(connection: Connection, user_id: int, item_id: int) -> int:
@@ -330,10 +351,16 @@ def check_new_folders(connection: Connection, sorter: Sorter, now: datetime, lim
         folder_id = int(check["folder_id"])
         user_id = int(check["user_id"])
         folder = next(
-            FolderOption(entry["id"], entry["name"], entry["path"])
-            for entry in list_folders(connection, user_id)
-            if entry["id"] == folder_id
+            (
+                FolderOption(entry["id"], entry["name"], entry["path"])
+                for entry in list_folders(connection, user_id)
+                if entry["id"] == folder_id
+            ),
+            None,
         )
+        if folder is None:
+            # Deleted since it was queued; its check went with it.
+            continue
         candidates = _candidates(connection, user_id, folder_id)
         try:
             matched = sorter.match_folder(folder, candidates) if candidates else []
@@ -347,13 +374,21 @@ def check_new_folders(connection: Connection, sorter: Sorter, now: datetime, lim
             connection.commit()
             continue
         allowed = {candidate.id for candidate in candidates}
-        connection.executemany(
-            """
-            INSERT INTO folder_suggestions (item_id, folder_id)
-            SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM folder_suggestions WHERE item_id = ? AND folder_id = ?)
-            """,
-            [(item_id, folder_id, item_id, folder_id) for item_id in matched if item_id in allowed],
-        )
+        try:
+            connection.executemany(
+                """
+                INSERT INTO folder_suggestions (item_id, folder_id)
+                SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM folder_suggestions WHERE item_id = ? AND folder_id = ?)
+                """,
+                [(item_id, folder_id, item_id, folder_id) for item_id in matched if item_id in allowed],
+            )
+        except IntegrityError:
+            # The folder or one of the lines was deleted while the engine was
+            # looking. Nothing is kept; a folder that still exists is checked
+            # again on the next pass, with the lines it has then.
+            connection.rollback()
+            log.info("Folder %s or one of its lines was deleted during its check", folder_id)
+            continue
         connection.execute("UPDATE folder_checks SET checked_at = ? WHERE folder_id = ?", (_iso(now), folder_id))
         connection.commit()
     return len(checks)

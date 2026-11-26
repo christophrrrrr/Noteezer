@@ -162,6 +162,25 @@ def test_a_new_folder_suggests_filed_lines_that_belong_there_too(tmp_path: Path)
     connection.close()
 
 
+def test_a_folder_deleted_during_its_check_is_skipped(tmp_path: Path) -> None:
+    connection = _db(tmp_path)
+    owner = _user(connection)
+    tennis = create_folder(connection, owner, "Table Tennis", NOW)
+    serve = save_item(connection, owner, "serve video", None, NOW, folder_id=tennis)
+    videos = create_folder(connection, owner, "Cool videos", NOW)
+    request_folder_check(connection, videos, NOW)
+
+    class DeletingEngine(Engine):
+        def match_folder(self, folder, candidates):
+            delete_folder(connection, owner, videos)
+            return [serve]
+
+    assert check_new_folders(connection, DeletingEngine(), NOW) == 1
+    assert also_suggestions_for(connection, owner) == {}
+    assert check_new_folders(connection, Engine(matches=[serve]), NOW) == 0
+    connection.close()
+
+
 def test_a_failing_folder_check_is_retried_then_given_up(tmp_path: Path) -> None:
     connection = _db(tmp_path)
     owner = _user(connection)
