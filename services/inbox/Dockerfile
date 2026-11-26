@@ -2,13 +2,21 @@
 # tests, .env, and the virtualenv stay out (see .dockerignore).
 # Pinned to one exact build of the image; the tag is kept for people reading it.
 # Moved to a newer build when Trivy in CI finds a fixed vulnerability in it
-# (2026-11-24: zlib, Debian 13.8; 2026-11-26: zstd, the 2026-11-24 build;
-# still Python 3.13.18).
+# (2026-11-24: zlib, Debian 13.8; 2026-11-26: its newest build, for zstd;
+# still Python 3.13.18). Zstd needed one more step, below.
 FROM python:3.13-slim@sha256:7249d5587b78209a006dc4a3b5340678f84ea729239193aa559962cd8c1fce50
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8000
+
+# A Debian security fix that the newest build of the base does not carry yet
+# (2026-11-26: CVE-2026-124851 in zstd, HIGH, found by Trivy). Only the named
+# package is upgraded, from Debian's own repositories. Once a newer base has
+# it, this changes nothing and can be removed.
+RUN apt-get update \
+    && apt-get install --yes --only-upgrade --no-install-recommends libzstd1 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv
 COPY requirements.txt .
