@@ -96,6 +96,31 @@ def test_confident_lines_are_filed_and_unclear_ones_wait(tmp_path: Path) -> None
     connection.close()
 
 
+def test_a_line_deleted_while_it_is_sorted_is_skipped(tmp_path: Path) -> None:
+    # Seen on Azure: a line deleted seconds after it was saved made the whole
+    # sorting pass fail on the sort_results foreign key.
+    connection = _db(tmp_path)
+    owner = _user(connection)
+    game = create_folder(connection, owner, "Game", NOW)
+    doomed = save_item(connection, owner, "deleted while the engine reads it #game", None, NOW)
+    kept = save_item(connection, owner, "idea king of the hill #game", None, NOW)
+
+    class DeletingSorter:
+        name = "deleting"
+
+        def suggest(self, note, folders):
+            if note.body.startswith("deleted"):
+                connection.execute("DELETE FROM items WHERE id = ?", (doomed,))
+                connection.commit()
+            return Suggestion(game, 0.9)
+
+    assert sort_pending(connection, DeletingSorter(), NOW) == 2
+    results = results_for(connection, owner)
+    assert doomed not in results
+    assert results[kept]["status"] == "filed"
+    connection.close()
+
+
 def test_nothing_is_sorted_until_the_user_has_a_folder(tmp_path: Path) -> None:
     connection = _db(tmp_path)
     owner = _user(connection)

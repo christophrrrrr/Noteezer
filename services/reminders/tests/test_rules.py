@@ -39,6 +39,21 @@ def test_daily_without_an_end_keeps_moving(db) -> None:
     assert (moved["status"], moved["remind_at"]) == ("scheduled", (START + timedelta(days=1)).isoformat())
 
 
+def test_daily_done_late_moves_to_the_next_time_still_ahead(db) -> None:
+    # Ticked three days and one hour late: the three missed days count as
+    # done, and the reminder waits for tomorrow's time instead of being due
+    # again at once.
+    late = START + timedelta(days=3, hours=1)
+    schedule(db, OWNER, 10, START, NOW, repeat_daily=True)
+    moved = complete(db, OWNER, 10, late)
+    assert (moved["status"], moved["remind_at"]) == ("scheduled", (START + timedelta(days=4)).isoformat())
+
+
+def test_daily_done_late_after_its_end_is_done(db) -> None:
+    schedule(db, OWNER, 10, START, NOW, repeat_daily=True, repeat_until=date(2026, 9, 30))
+    assert complete(db, OWNER, 10, START + timedelta(days=5))["status"] == "done"
+
+
 def test_one_shot_done_stays_done(db) -> None:
     schedule(db, OWNER, 10, START, NOW)
     assert complete(db, OWNER, 10, NOW)["status"] == "done"
