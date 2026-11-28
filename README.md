@@ -51,7 +51,7 @@ Push notifications to the phone are still not built (ADR-5, ADR-10). The deploym
 
 ## Run
 
-Noteezer is a static UI and two services (ADR-6). **inbox** (`services/inbox`, port 8000) is a JSON API under `/api` for accounts, lines, folders, sorting, images, and link previews. **reminders** (`services/reminders`, port 8001) stores reminder times and decides when one is due. Each has its own database. The **UI** (`ui/`, port 8080) is plain files that call both: inbox for everything, and reminders directly for done and snooze. Inbox calls reminders over HTTP with a 2 second timeout, and keeps working without times when reminders is down.
+Noteezer is a static UI and two services (ADR-6). **inbox** (`services/inbox`, port 8000) is a JSON API under `/api` for accounts, lines, folders, sorting, images, and link previews. **reminders** (`services/reminders`, port 8001) stores reminder times and decides when one is due. Each has its own database. The **UI** (`ui/`, port 8080) is plain files that call both: inbox for everything, and reminders directly for done and snooze. Inbox calls reminders over HTTP with a 2 second timeout on each step of a call (connecting, sending, reading the answer), and keeps working without times when reminders is down. The timeout does not cover the whole call or the name lookup, so a call to a reminders service that is down took about 4 s in the tests (ADR-6).
 
 ### Everything at once, with Docker
 
@@ -164,13 +164,13 @@ cd services\reminders
 pytest --cov
 ```
 
-Coverage is measured on each service's whole `app` (settings in its `pyproject.toml`), and the run fails below 70%. Inbox is 132 tests at 97%. `tests/test_api.py` drives the JSON API the UI uses, including that one person never reaches another's lines, and `tests/test_ui_files.py` checks the UI's files without a browser: the manifest and icons, that every file the page loads exists, that the page has no inline script, and that note text never becomes HTML. Reminders is 23 tests at 91%, with the rules (`reminders.py`) and tokens at 100%.
+Coverage is measured on each service's whole `app` (settings in its `pyproject.toml`), and the run fails below 70%. Inbox is 152 tests at 97%, reminders 29 tests at 91%. `tests/test_api.py` drives the JSON API the UI uses, including that one person never reaches another's lines, and `tests/test_ui_files.py` checks the UI's files without a browser: the manifest and icons, that every file the page loads exists, that the page has no inline script, and that note text never becomes HTML. Reminders is 23 tests at 91%, with the rules (`reminders.py`) and tokens at 100%.
 
 `ruff check services scripts` lints both services with the rules in `ruff.toml`.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push and pull request, and a red job blocks the merge (ADR-9):
+`.github/workflows/ci.yml` runs on every push and pull request, and a red job blocks the merge: branch protection on `main` requires `lint`, `contracts`, and `test` and `build` for both services to pass, also for the repository owner (ADR-9):
 
 - **lint**: ruff, including its Bandit security rules (SAST). A finding that is not a real risk is silenced on its own line with the reason.
 - **test**, once per service: starts a throwaway SQL Server container in the job, runs the tests with coverage (below 70% fails), and checks that the committed `openapi.yaml` still matches the code. `pip-audit` first checks the service's dependencies against the published advisories (SCA) and fails on any known vulnerability.
@@ -205,10 +205,11 @@ On 2026-11-20 reminders was locked out of its own database on Azure on purpose (
 
 ## Secret scanning incidents
 
-GitGuardian scans every pull request. No real credential has been pushed, but both alerts are recorded here, as the brief asks for any leak.
+GitGuardian scans every pull request. No real credential has been pushed, but all three alerts are recorded here, as the brief asks for any leak.
 
 - **2026-11-13, PR #9: a local test password.** The password of the SQL Server container on my laptop was written as a default in `tests/conftest.py` and in this README. It only ever protected a container listening on `127.0.0.1`. The same day it was removed from both files (commit 7318560), the tests started reading it from the environment or a git-ignored `.env`, and the container was recreated with a new random password, so the old value works nowhere. History was not rewritten, because pushed commits keep their timestamps. GitGuardian's incident was resolved.
 - **2026-11-18, PR #12: a false positive.** `tests/test_db.py` contained the example connection string `mssql://inbox:p%40ss%2Fw0rd@db.example.net:1444/...`, which checks that a percent-encoded password is decoded. It was never a password anywhere, and `example.net` is reserved for examples. On 2026-11-19 the test was changed to build its example from parts so scanners stop matching it, and the incident was marked as a false positive.
+- **2026-11-16, PR #11: a false positive.** `docker-compose.yml` had the line `MSSQL_SA_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}`. The text after `:?` is the error message compose prints when the variable is missing, not a password; the real value came from the git-ignored `.env`. The line was replaced the next day (commit 4e5dbb6), and since 2026-11-20 a `secrets` container makes the local passwords when there is no `.env` (commit 394bd95).
 
 Real passwords live only in git-ignored `.env` files on the laptop and in GitHub Actions secrets.
 

@@ -1,9 +1,12 @@
 """Inbox's side of the seam: calls to the reminders service over HTTP.
 
-Every call has a 2 second timeout (REMINDERS_TIMEOUT). When reminders does
-not answer in time, cannot be reached, or fails, RemindersUnavailable is
-raised and inbox carries on without times (ADR-6): a line still saves, the
-list shows "reminders unavailable", and the sorter tries again later.
+Every call has a 2 second timeout (REMINDERS_TIMEOUT). httpx applies it to
+each step (connecting, sending, reading the answer), not to the whole call,
+and the name lookup is outside it, so a call to a reminders service that is
+down can take about 4 s (ADR-6). When reminders does not answer in time,
+cannot be reached, or fails, RemindersUnavailable is raised and inbox carries
+on without times: a line still saves, the list shows "reminders
+unavailable", and the sorter tries again later.
 
 Each call carries a token with the inbox scope for the user it is about, made
 here with the shared SESSION_SECRET, and the current request id so one id
