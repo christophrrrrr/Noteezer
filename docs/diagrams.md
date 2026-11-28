@@ -83,6 +83,8 @@ The line is committed before reminders is called, so a reminders failure never l
 
 Each service owns its database and runs its own numbered migrations at startup (ADR-7), recorded in its own `schema_migrations` table. There is no foreign key across the seam: `reminders.item_id` points at `items.id` in the other database, and `reminders.user_id` is a copy, so reminders checks ownership without asking inbox.
 
+#### Inbox database (`crintz-ieu2024-inbox-db`)
+
 ```mermaid
 erDiagram
     users ||--o{ items : owns
@@ -101,7 +103,6 @@ erDiagram
     folders ||--o| folder_checks : "check queued (CASCADE)"
     items ||--o| images : "has (CASCADE)"
     items ||--o| link_previews : "has (CASCADE)"
-    items ||..o| reminders : "item_id across the seam, no FK"
 
     users {
         INT id PK
@@ -183,6 +184,19 @@ erDiagram
         NVARCHAR description
         NVARCHAR site
         NVARCHAR fetched_at
+    }
+```
+
+#### Reminders database (`crintz-ieu2024-reminders-db`)
+
+`inbox_items` is not a table here: it stands for the inbox row that `reminders.item_id` points at.
+
+```mermaid
+erDiagram
+    inbox_items ||..o| reminders : "item_id across the seam, no FK"
+
+    inbox_items {
+        INT id "items.id, in the inbox database, not in this one"
     }
     reminders {
         INT item_id PK "items.id in the inbox database"

@@ -1,6 +1,6 @@
 # nginx for the static UI in docker compose. The official nginx image fills
 # ${INBOX_URL} and ${REMINDERS_URL} from the environment when it starts.
-# In Azure, Static Web Apps serves the same files (ADR-8).
+# In Azure, the storage account's static website serves the same files (ADR-8).
 server {
     listen 8080;
     server_name _;
