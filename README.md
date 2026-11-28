@@ -51,7 +51,7 @@ Push notifications to the phone are still not built (ADR-5, ADR-10). The deploym
 
 ## Run
 
-Noteezer is a static UI and two services (ADR-6). **inbox** (`services/inbox`, port 8000) is a JSON API under `/api` for accounts, lines, folders, sorting, images, and link previews. **reminders** (`services/reminders`, port 8001) stores reminder times and decides when one is due. Each has its own database. The **UI** (`ui/`, port 8080) is plain files that call both: inbox for everything, and reminders directly for done and snooze. Inbox calls reminders over HTTP with a 2 second timeout on each step of a call (connecting, sending, reading the answer), and keeps working without times when reminders is down. The timeout does not cover the whole call or the name lookup, so a call to a reminders service that is down took about 4 s in the tests (ADR-6).
+Noteezer is a static UI and two services (ADR-6). **inbox** (`services/inbox`, port 8000) is a JSON API under `/api` for accounts, lines, folders, sorting, images, and link previews. **reminders** (`services/reminders`, port 8001) stores reminder times and decides when one is due. Each has its own database. The **UI** (`ui/`, port 8080) is plain files that call both: inbox for everything, and reminders directly for done and snooze. Inbox calls reminders over HTTP with a 2 second deadline for the whole call, name lookup included, and keeps working without times when reminders is down (ADR-6).
 
 ### Everything at once, with Docker
 
