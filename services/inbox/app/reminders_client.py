@@ -1,9 +1,12 @@
 """Inbox's side of the seam: calls to the reminders service over HTTP.
 
-Every call has a 2 second timeout (REMINDERS_TIMEOUT). httpx applies it to
-each step (connecting, sending, reading the answer), not to the whole call,
-and the name lookup is outside it, so a call to a reminders service that is
-down can take about 4 s (ADR-6). When reminders does not answer in time,
+Every call has a 2 second deadline (REMINDERS_TIMEOUT) for the whole call,
+name lookup included. httpx's own timeout applies to each step on its own
+(connecting, sending, reading) and not to the lookup, so one call to a
+reminders service that was down took about 4 s; the call now runs in a worker
+thread, and inbox stops waiting for it when the deadline passes (ADR-6). A
+write that ran out of time may still reach reminders, as before, which is why
+writes are not retried. When reminders does not answer in time,
 cannot be reached, or fails, RemindersUnavailable is raised and inbox carries
 on without times: a line still saves, the list shows "reminders
 unavailable", and the sorter tries again later.
@@ -15,6 +18,8 @@ finds the request in both services' logs.
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as DeadlinePassed
 from datetime import date, datetime
 
 import httpx
@@ -29,6 +34,10 @@ DEFAULT_TIMEOUT_SECONDS = 2.0
 
 # Tests can swap this for httpx.MockTransport.
 _transport: httpx.BaseTransport | None = None
+
+# Calls run here so inbox can stop waiting at the deadline. A call it gave up on
+# finishes or fails on its own within httpx's per-step timeouts.
+_calls = ThreadPoolExecutor(max_workers=8, thread_name_prefix="reminders-call")
 
 
 class RemindersUnavailable(Exception):
@@ -93,12 +102,23 @@ class RemindersClient:
         rid = request_id.get()
         if rid:
             headers["X-Request-ID"] = rid
+        # The client is built here, before the deadline starts: building it
+        # loads the TLS settings, which is not reminders' time.
+        client = httpx.Client(base_url=self.base_url, timeout=self.timeout, transport=_transport)
+        call = _calls.submit(self._send, client, method, path, headers, json)
         try:
-            with httpx.Client(base_url=self.base_url, timeout=self.timeout, transport=_transport) as client:
-                return client.request(method, path, headers=headers, json=json)
+            return call.result(timeout=self.timeout)
+        except DeadlinePassed as error:
+            log.warning("Reminders did not answer %s %s within %ss", method, path, self.timeout)
+            raise RemindersUnavailable(f"no answer within {self.timeout}s") from error
         except httpx.HTTPError as error:
             log.warning("Reminders did not answer %s %s: %s", method, path, error)
             raise RemindersUnavailable(str(error)) from error
+
+    @staticmethod
+    def _send(client: httpx.Client, method: str, path: str, headers: dict, json: dict | None) -> httpx.Response:
+        with client:
+            return client.request(method, path, headers=headers, json=json)
 
     @staticmethod
     def _expect(response: httpx.Response, status: int) -> None:

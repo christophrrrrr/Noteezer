@@ -159,6 +159,22 @@ def test_a_slow_reminders_is_given_up_on_after_the_timeout() -> None:
         assert time.monotonic() - started < 2
 
 
+def test_the_timeout_bounds_the_whole_call(monkeypatch) -> None:
+    # httpx's timeout covers each step on its own and not the name lookup, so a
+    # slow lookup followed by a slow answer took twice the timeout (ADR-6). A
+    # transport that stalls stands in for both: no step of it ever times out.
+    def stall(request: httpx.Request) -> httpx.Response:
+        time.sleep(1.5)
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(reminders_client, "_transport", httpx.MockTransport(stall))
+    client = RemindersClient("http://reminders", timeout=0.3)
+    started = time.monotonic()
+    with pytest.raises(RemindersUnavailable, match="within"):
+        client.for_user(1)
+    assert time.monotonic() - started < 1
+
+
 @pytest.mark.parametrize("status", [500, 503, 401])
 def test_an_error_answer_counts_as_unavailable(monkeypatch, status) -> None:
     monkeypatch.setattr(reminders_client, "_transport", httpx.MockTransport(lambda request: httpx.Response(status)))
