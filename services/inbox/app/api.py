@@ -23,7 +23,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.classify import ClassificationError
 from app.db import connect
@@ -136,8 +136,100 @@ class Problem(BaseModel):
     detail: str
 
 
+# The answers below describe what the page receives. They are documented in
+# openapi.yaml as the 200 responses but not used to filter the answer, so a
+# field missing here cannot silently vanish from the page; a test checks real
+# answers against them with extra fields forbidden, so they cannot drift.
+class Answer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class FolderRef(Answer):
+    id: int
+    path: str
+
+
+class FolderEntry(Answer):
+    id: int
+    parent_id: int | None
+    name: str
+    depth: int
+    path: str
+    count: int
+
+
+class FolderList(Answer):
+    folders: list[FolderEntry]
+    unsorted_count: int
+    total_count: int
+
+
+class Preview(Answer):
+    url: str
+    title: str
+    description: str
+    site: str
+
+
+class ImageInfo(Answer):
+    ai_allowed: bool
+    title: str | None
+    text: str | None
+    read: bool
+
+
+class SortResult(Answer):
+    status: str
+    folder_id: int | None
+    folder_path: str
+    confidence: float | None
+    engine: str
+    proposed_name: str | None
+    proposed_parent_id: int | None
+    proposed_path: str
+    suggested_remind_at: str | None
+    remind_label: str
+
+
+class ListedItem(Answer):
+    id: int
+    body: str
+    kind: str
+    task_done: bool
+    created_at: str
+    split_from: int | None
+    tags: list[str]
+    folder_ids: list[int]
+    folders: list[FolderRef]
+    also: list[FolderRef]
+    remind_at: str | None
+    remind_local: str
+    remind_label: str
+    status: str | None
+    repeat_daily: bool
+    repeat_until: str | None
+    snoozed_count: int
+    reminder_unavailable: bool
+    preview: Preview | None
+    image: ImageInfo | None
+    sort: SortResult | None
+
+
+class ItemPage(Answer):
+    items: list[ListedItem]
+    timezone: str
+    reminders_down: bool
+
+
+class TaskState(Answer):
+    task_done: bool
+
+
 PROBLEM = {"model": Problem}
 NOT_FOUND = {404: {"model": Problem, "description": "No such line or folder for this account."}}
+BINARY = {"schema": {"type": "string", "format": "binary"}}
+IMAGE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")  # what check_image accepts
+IMAGE = {200: {"description": "The image's bytes, with its type.", "content": {kind: BINARY for kind in IMAGE_TYPES}}}
 UNAVAILABLE = {503: {"model": Problem, "description": "The reminders service did not answer in time."}}
 
 
@@ -196,7 +288,7 @@ def register_routes(app: FastAPI) -> None:
             connection.close()
         return Response(status_code=204)
 
-    @router.get("/api/folders", tags=["folders"])
+    @router.get("/api/folders", tags=["folders"], response_model=None, responses={200: {"model": FolderList}})
     def folders(user_id: int = Depends(current_user)) -> dict:
         connection = connect()
         try:
@@ -209,7 +301,7 @@ def register_routes(app: FastAPI) -> None:
             entry["count"] = counts.get(entry["id"], 0)
         return {"folders": entries, "unsorted_count": counts.get(None, 0), "total_count": total}
 
-    @router.get("/api/items", tags=["items"], responses=NOT_FOUND)
+    @router.get("/api/items", tags=["items"], response_model=None, responses={200: {"model": ItemPage}} | NOT_FOUND)
     def items(q: str = "", folder: str = "", user_id: int = Depends(current_user)) -> dict:
         # folder is "" for everything, "unsorted", or a folder id.
         unsorted = folder == UNSORTED
@@ -317,7 +409,7 @@ def register_routes(app: FastAPI) -> None:
         _wake_sorter(request)
         return Response(status_code=201, content=Created(id=item_id).model_dump_json(), media_type="application/json")
 
-    @router.get("/api/items/{item_id}/image", tags=["items"], response_class=Response, responses=NOT_FOUND)
+    @router.get("/api/items/{item_id}/image", tags=["items"], response_class=Response, responses=IMAGE | NOT_FOUND)
     def item_image(item_id: int, user_id: int = Depends(current_user)) -> Response:
         connection = connect()
         try:
@@ -370,7 +462,12 @@ def register_routes(app: FastAPI) -> None:
         _run(lambda connection: set_folders(connection, user_id, item_id, body.folder_ids))
         return Response(status_code=204)
 
-    @router.post("/api/items/{item_id}/toggle", tags=["items"], responses=NOT_FOUND)
+    @router.post(
+        "/api/items/{item_id}/toggle",
+        tags=["items"],
+        response_model=None,
+        responses={200: {"model": TaskState}} | NOT_FOUND,
+    )
     def toggle(item_id: int, user_id: int = Depends(current_user)) -> dict:
         def flip(connection):
             if item_kind(connection, user_id, item_id) != "task":

@@ -142,9 +142,7 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties: true
-                type: object
-                title: Response Folders Api Folders Get
+                $ref: '#/components/schemas/FolderList'
         '400':
           description: Bad Request
           content:
@@ -226,9 +224,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: true
-                title: Response Items Api Items Get
+                $ref: '#/components/schemas/ItemPage'
         '400':
           content:
             application/json:
@@ -347,7 +343,24 @@ paths:
           title: Item Id
       responses:
         '200':
-          description: Successful Response
+          description: The image's bytes, with its type.
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/gif:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
         '400':
           content:
             application/json:
@@ -530,9 +543,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: true
-                title: Response Toggle Api Items  Item Id  Toggle Post
+                $ref: '#/components/schemas/TaskState'
         '400':
           content:
             application/json:
@@ -1080,6 +1091,38 @@ components:
       - email
       - password
       title: Credentials
+    FolderEntry:
+      properties:
+        id:
+          type: integer
+          title: Id
+        parent_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Parent Id
+        name:
+          type: string
+          title: Name
+        depth:
+          type: integer
+          title: Depth
+        path:
+          type: string
+          title: Path
+        count:
+          type: integer
+          title: Count
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - parent_id
+      - name
+      - depth
+      - path
+      - count
+      title: FolderEntry
     FolderIds:
       properties:
         folder_ids:
@@ -1091,6 +1134,26 @@ components:
       required:
       - folder_ids
       title: FolderIds
+    FolderList:
+      properties:
+        folders:
+          items:
+            $ref: '#/components/schemas/FolderEntry'
+          type: array
+          title: Folders
+        unsorted_count:
+          type: integer
+          title: Unsorted Count
+        total_count:
+          type: integer
+          title: Total Count
+      additionalProperties: false
+      type: object
+      required:
+      - folders
+      - unsorted_count
+      - total_count
+      title: FolderList
     FolderName:
       properties:
         name:
@@ -1109,6 +1172,20 @@ components:
           title: Parent Id
       type: object
       title: FolderParent
+    FolderRef:
+      properties:
+        id:
+          type: integer
+          title: Id
+        path:
+          type: string
+          title: Path
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - path
+      title: FolderRef
     HTTPValidationError:
       properties:
         detail:
@@ -1135,6 +1212,32 @@ components:
       - db
       - version
       title: Health
+    ImageInfo:
+      properties:
+        ai_allowed:
+          type: boolean
+          title: Ai Allowed
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
+        text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Text
+        read:
+          type: boolean
+          title: Read
+      additionalProperties: false
+      type: object
+      required:
+      - ai_allowed
+      - title
+      - text
+      - read
+      title: ImageInfo
     ItemEdit:
       properties:
         body:
@@ -1161,6 +1264,135 @@ components:
       required:
       - body
       title: ItemEdit
+    ItemPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ListedItem'
+          type: array
+          title: Items
+        timezone:
+          type: string
+          title: Timezone
+        reminders_down:
+          type: boolean
+          title: Reminders Down
+      additionalProperties: false
+      type: object
+      required:
+      - items
+      - timezone
+      - reminders_down
+      title: ItemPage
+    ListedItem:
+      properties:
+        id:
+          type: integer
+          title: Id
+        body:
+          type: string
+          title: Body
+        kind:
+          type: string
+          title: Kind
+        task_done:
+          type: boolean
+          title: Task Done
+        created_at:
+          type: string
+          title: Created At
+        split_from:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Split From
+        tags:
+          items:
+            type: string
+          type: array
+          title: Tags
+        folder_ids:
+          items:
+            type: integer
+          type: array
+          title: Folder Ids
+        folders:
+          items:
+            $ref: '#/components/schemas/FolderRef'
+          type: array
+          title: Folders
+        also:
+          items:
+            $ref: '#/components/schemas/FolderRef'
+          type: array
+          title: Also
+        remind_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Remind At
+        remind_local:
+          type: string
+          title: Remind Local
+        remind_label:
+          type: string
+          title: Remind Label
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        repeat_daily:
+          type: boolean
+          title: Repeat Daily
+        repeat_until:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repeat Until
+        snoozed_count:
+          type: integer
+          title: Snoozed Count
+        reminder_unavailable:
+          type: boolean
+          title: Reminder Unavailable
+        preview:
+          anyOf:
+          - $ref: '#/components/schemas/Preview'
+          - type: 'null'
+        image:
+          anyOf:
+          - $ref: '#/components/schemas/ImageInfo'
+          - type: 'null'
+        sort:
+          anyOf:
+          - $ref: '#/components/schemas/SortResult'
+          - type: 'null'
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - body
+      - kind
+      - task_done
+      - created_at
+      - split_from
+      - tags
+      - folder_ids
+      - folders
+      - also
+      - remind_at
+      - remind_local
+      - remind_label
+      - status
+      - repeat_daily
+      - repeat_until
+      - snoozed_count
+      - reminder_unavailable
+      - preview
+      - image
+      - sort
+      title: ListedItem
     NewFolder:
       properties:
         name:
@@ -1175,6 +1407,28 @@ components:
       required:
       - name
       title: NewFolder
+    Preview:
+      properties:
+        url:
+          type: string
+          title: Url
+        title:
+          type: string
+          title: Title
+        description:
+          type: string
+          title: Description
+        site:
+          type: string
+          title: Site
+      additionalProperties: false
+      type: object
+      required:
+      - url
+      - title
+      - description
+      - site
+      title: Preview
     Problem:
       properties:
         detail:
@@ -1185,6 +1439,72 @@ components:
       - detail
       title: Problem
       description: 'Every error: a sentence the UI can show as it is.'
+    SortResult:
+      properties:
+        status:
+          type: string
+          title: Status
+        folder_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Folder Id
+        folder_path:
+          type: string
+          title: Folder Path
+        confidence:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Confidence
+        engine:
+          type: string
+          title: Engine
+        proposed_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Proposed Name
+        proposed_parent_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Proposed Parent Id
+        proposed_path:
+          type: string
+          title: Proposed Path
+        suggested_remind_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Suggested Remind At
+        remind_label:
+          type: string
+          title: Remind Label
+      additionalProperties: false
+      type: object
+      required:
+      - status
+      - folder_id
+      - folder_path
+      - confidence
+      - engine
+      - proposed_name
+      - proposed_parent_id
+      - proposed_path
+      - suggested_remind_at
+      - remind_label
+      title: SortResult
+    TaskState:
+      properties:
+        task_done:
+          type: boolean
+          title: Task Done
+      additionalProperties: false
+      type: object
+      required:
+      - task_done
+      title: TaskState
     Token:
       properties:
         token:

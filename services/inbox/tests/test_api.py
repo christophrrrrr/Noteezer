@@ -6,7 +6,9 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api import FolderList, ItemPage, TaskState
 from app.db import connect
+from app.links import LinkPreview, save_preview
 from app.main import create_app
 from app.reminders_client import default_client
 from app.sorting import NewFolder, Part, Suggestion, sort_pending
@@ -349,3 +351,36 @@ def test_a_new_account_starts_with_the_examples_unless_it_asks_not_to(client) ->
     answer = client.post("/api/register", json={"email": "old@example.com", "password": "password1", "examples": False})
     headers = {"Authorization": f"Bearer {answer.json()['token']}"}
     assert client.get("/api/folders", headers=headers).json()["total_count"] == 0
+
+
+def test_every_answer_matches_its_documented_schema(client: TestClient) -> None:
+    # openapi.yaml documents these answers with the models in api.py. Every
+    # optional part is filled in here, and the models forbid extra fields, so a
+    # field added, renamed, or dropped in the code fails this test.
+    sign_in(client)
+    projects = client.post("/api/folders", json={"name": "Projects"}).json()["id"]
+    game = client.post("/api/folders", json={"name": "Game", "parent_id": projects}).json()["id"]
+    task = client.post("/api/items", data={"body": "todo fix hitbox #game", "kind": "task"}).json()["id"]
+    client.post("/api/items", data={"body": "remind dentist", "remind_at": f"{LATER:%Y-%m-%dT%H:%M}"})
+    client.post("/api/items", data={"body": "a screenshot"}, files={"image": ("shot.png", PNG, "image/png")})
+    client.post("/api/items", data={"body": "dentist on saturday"})
+    link = client.post("/api/items", data={"body": "https://example.com/serve", "folder_id": str(game)}).json()["id"]
+    connection = connect()
+    try:
+        preview = LinkPreview("https://example.com/serve", "Serve", "A serve drill", "example.com")
+        save_preview(connection, link, "https://example.com/serve", preview, datetime.now(timezone.utc))
+        connection.execute("INSERT INTO folder_suggestions (item_id, folder_id) VALUES (?, ?)", (link, projects))
+        connection.commit()
+    finally:
+        connection.close()
+    _sort(Suggestion(None, 0.0, new_folder=NewFolder("Health", projects), remind_at=LATER))
+
+    assert TaskState.model_validate(client.post(f"/api/items/{task}/toggle").json()).task_done is True
+    folders = FolderList.model_validate(client.get("/api/folders").json())
+    assert {(entry.path, entry.depth) for entry in folders.folders} == {("Projects", 0), ("Projects / Game", 1)}
+    page = ItemPage.model_validate(client.get("/api/items").json())
+    items = page.items
+    assert any(item.preview for item in items) and any(item.image for item in items)
+    assert any(item.sort and item.sort.proposed_path == "Projects / Health" for item in items)
+    assert any(item.also for item in items) and any(item.tags for item in items)
+    assert any(item.remind_at for item in items)
