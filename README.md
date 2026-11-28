@@ -4,7 +4,7 @@ Noteezer is a phone-friendly capture app for the notes, tasks, links, and remind
 
 You type one line and save it. Optional buttons can force the kind. A reminder takes its time from a picker or, with Gemini, from the text itself. The app stores everything in SQL Server (Azure SQL when deployed) and shows what is due when you open it.
 
-The use case is approved. You can register, save a line, search it, edit it, delete it, and mark a task done. A reminder can be a single time or every day from a start time until an optional end date. Snooze hides it for one hour. Marking a daily reminder done moves it to the next day.
+The use case is approved. You can register, save a line, search it, edit it, delete it, and mark a task done. A reminder can be a single time or every day from a start time until an optional end date. Snooze hides it for one hour. Marking a daily reminder done moves it to its next time that is still ahead: the next day, or later if it was ticked off days late.
 
 ## Who it is for
 
@@ -20,7 +20,7 @@ One person who currently pastes notes into a chat with themselves and later sear
 
 **Images.** A line can carry one screenshot or photo: pick it with the image field or paste it into the text box. Only PNG, JPEG, WebP, and GIF up to 10 MB are accepted, judged from the file's bytes. Images are stored in the database and served only to their owner. With "Let AI read this image" ticked (the default), Gemini reads the image while sorting. A line saved with only an image starts as "Screenshot" and takes Gemini's title as its text, and the text Gemini read is shown below the image and found by search. Unticked, the image never leaves the server.
 
-**Reminders.** Stores when an item is due and whether it is scheduled, due, snoozed, or done. It does not store the item text. Inbox saves the item, then calls `schedule(item_id, when)` when a time was picked.
+**Reminders.** Stores when an item is due and whether it is scheduled, due, snoozed, or done. It does not store the item text. Inbox saves the item, then calls `PUT /reminders/{item_id}` on the reminders service when a time was picked.
 
 ## How a line gets its kind
 
@@ -164,7 +164,7 @@ cd services\reminders
 pytest --cov
 ```
 
-Coverage is measured on each service's whole `app` (settings in its `pyproject.toml`), and the run fails below 70%. Inbox is 152 tests at 97%, reminders 29 tests at 91%. `tests/test_api.py` drives the JSON API the UI uses, including that one person never reaches another's lines, and `tests/test_ui_files.py` checks the UI's files without a browser: the manifest and icons, that every file the page loads exists, that the page has no inline script, and that note text never becomes HTML. Reminders is 23 tests at 91%, with the rules (`reminders.py`) and tokens at 100%.
+Coverage is measured on each service's whole `app` (settings in its `pyproject.toml`), and the run fails below 70%. Inbox is 154 tests at 97%, reminders 29 tests at 91%. `tests/test_api.py` drives the JSON API the UI uses, including that one person never reaches another's lines, and `tests/test_ui_files.py` checks the UI's files without a browser: the manifest and icons, that every file the page loads exists, that the page has no inline script, and that note text never becomes HTML. Reminders is 29 tests at 91%, with the rules (`reminders.py`) and tokens at 100%.
 
 `ruff check services scripts` lints both services with the rules in `ruff.toml`.
 
@@ -199,7 +199,7 @@ A new account starts with an Examples folder holding three lines that show how a
 
 ## When reminders is down
 
-On 2026-11-20 reminders was locked out of its own database on Azure on purpose (`DENY CONNECT`). Inbox stayed healthy, lines still saved within about 4.5 s, and a reminder saved meanwhile showed "no time yet, reminders is unavailable" under a red banner (screenshot below). A deploy merged during the outage failed at its health check, because reminders' new revision could not start. After `GRANT CONNECT` the same run was re-run and passed. The test also found two bugs, both fixed: a refused login was retried for a minute as if the database were paused, and the health check could take 27 minutes to give up. Every step, log line and run link is in [docs/evidence/partial-failure.md](docs/evidence/partial-failure.md).
+On 2026-11-20 reminders was locked out of its own database on Azure on purpose (`DENY CONNECT`). Inbox stayed healthy, lines still saved within about 4.5 s (two calls to reminders of 2 s each; since 2026-11-28 each call has a 2 s deadline in total, ADR-6), and a reminder saved meanwhile showed "no time yet, reminders is unavailable" under a red banner (screenshot below). A deploy merged during the outage failed at its health check, because reminders' new revision could not start. After `GRANT CONNECT` the same run was re-run and passed. The test also found two bugs, both fixed: a refused login was retried for a minute as if the database were paused, and the health check could take 27 minutes to give up. Every step, log line and run link is in [docs/evidence/partial-failure.md](docs/evidence/partial-failure.md).
 
 <img src="docs/evidence/partial-failure-reminders-down.png" alt="The inbox page while reminders is down: a red banner says reminders are unavailable and lines still save, and the new reminder line says no time yet, reminders is unavailable" width="300">
 
@@ -321,7 +321,7 @@ Step 8 is the CD workflow above. Since then only the pipeline changes anything. 
 
 ## System description
 
-`system.yaml` describes the whole system: both services, their variables, what inbox calls on reminders and what happens when that fails, and the Azure names. `system.schema.json` is its schema. Each service's `openapi.yaml` is generated from the code, never edited by hand. After changing a route, regenerate it and commit it with the change:
+`system.yaml` describes the whole system: both services, their variables, what inbox calls on reminders and what happens when that fails, and the Azure names. `system.schema.json` is its schema. Each service's `openapi.yaml` is generated from the code, never edited by hand. Every answer has a schema: the big ones the page reads (`GET /api/items`, `GET /api/folders`) are described by models in `api.py`, and `test_every_answer_matches_its_documented_schema` checks real answers against them with extra fields forbidden, so the document cannot drift from what the code sends. After changing a route, regenerate it and commit it with the change:
 
 ```
 cd services\inbox
